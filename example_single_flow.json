@@ -1,0 +1,12 @@
+ {
+  "flow_id": "example-1-sqli",
+  "Destination Port": 80,
+  "Flow Duration": 15000,
+  "Total Fwd Packets": 6,
+  "Total Backward Packets": 5,
+  "Flow Bytes/s": 1200.0,
+  "Flow Packets/s": 90.0,
+  "Init_Win_bytes_forward": 8192,
+  "Init_Win_bytes_backward": 8192,
+  "http_payload": "user=admin&pass=' OR '1'='1"
+}

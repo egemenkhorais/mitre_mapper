@@ -1,0 +1,58 @@
+[
+  {
+    "flow_id": "batch-1-sqli",
+    "Destination Port": 80,
+    "Flow Duration": 15000,
+    "Total Fwd Packets": 6,
+    "Total Backward Packets": 5,
+    "Flow Bytes/s": 1200.0,
+    "Flow Packets/s": 90.0,
+    "Init_Win_bytes_forward": 8192,
+    "Init_Win_bytes_backward": 8192,
+    "http_payload": "id=1 UNION SELECT username, password FROM users--"
+  },
+  {
+    "flow_id": "batch-2-xss",
+    "Destination Port": 80,
+    "Flow Duration": 12000,
+    "Total Fwd Packets": 4,
+    "Total Backward Packets": 3,
+    "Flow Bytes/s": 800.0,
+    "Flow Packets/s": 60.0,
+    "Init_Win_bytes_forward": 8192,
+    "Init_Win_bytes_backward": 8192,
+    "http_payload": "comment=<script>alert(document.cookie)</script>"
+  },
+  {
+    "flow_id": "batch-3-ddos",
+    "Destination Port": 80,
+    "Flow Duration": 400,
+    "Total Fwd Packets": 450,
+    "Total Backward Packets": 1,
+    "Flow Bytes/s": 950000.0,
+    "Flow Packets/s": 9000.0,
+    "SYN Flag Count": 450
+  },
+  {
+    "flow_id": "batch-4-raw-http",
+    "Destination Port": 80,
+    "Flow Duration": 14000,
+    "Total Fwd Packets": 5,
+    "Total Backward Packets": 4,
+    "Flow Bytes/s": 950.0,
+    "Flow Packets/s": 70.0,
+    "Init_Win_bytes_forward": 8192,
+    "Init_Win_bytes_backward": 8192,
+    "raw_http_request": "POST http://internal-app.local/login.jsp HTTP/1.1\r\nHost: internal-app.local\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 40\r\n\r\nuser=admin&pass=%27%20OR%20%271%27%3D%271"
+  },
+  {
+    "flow_id": "batch-5-portscan",
+    "Destination Port": 3389,
+    "Flow Duration": 15,
+    "Total Fwd Packets": 1,
+    "Total Backward Packets": 0,
+    "Flow Bytes/s": 40.0,
+    "Flow Packets/s": 66.0,
+    "SYN Flag Count": 1
+  }
+]

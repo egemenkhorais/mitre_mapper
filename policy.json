@@ -1,0 +1,215 @@
+{
+  "Web Attack SQL Injection": {
+    "mitre": ["T1190"],
+    "description": "Exploit Public Facing Application",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_payload",
+      "get_asset",
+      "get_openvas",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Review vulnerable service",
+      "Validate exposure",
+      "Inspect exploitation evidence",
+      "Review WAF logs",
+      "Verify patch status"
+    ]
+  },
+
+  "Web Attack XSS": {
+    "mitre": ["T1189"],
+    "description": "Drive-by Compromise",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_payload",
+      "get_asset",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Validate input sanitization",
+      "Inspect HTTP requests",
+      "Review web logs"
+    ]
+  },
+
+  "PortScan": {
+    "mitre": ["T1046"],
+    "description": "Network Service Discovery",
+    "severity": "LOW",
+    "candidate_tools": [
+      "get_asset",
+      "get_whois",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Monitor scan source",
+      "Review firewall logs",
+      "Track scan frequency"
+    ]
+  },
+
+  "FTP-Patator": {
+    "mitre": ["T1110"],
+    "description": "Brute Force",
+    "severity": "MEDIUM",
+    "candidate_tools": [
+      "get_asset",
+      "get_user_activity",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Review authentication logs",
+      "Check MFA status",
+      "Review lockout policy"
+    ]
+  },
+
+  "SSH-Patator": {
+    "mitre": ["T1110"],
+    "description": "Brute Force",
+    "severity": "MEDIUM",
+    "candidate_tools": [
+      "get_asset",
+      "get_user_activity",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Review SSH login attempts",
+      "Review source hosts",
+      "Check MFA status"
+    ]
+  },
+
+  "Bot": {
+    "mitre": ["T1071"],
+    "description": "Application Layer Protocol",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_dns_history",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Inspect outbound communication",
+      "Identify C2 infrastructure",
+      "Review suspicious domains"
+    ]
+  },
+
+  "Heartbleed": {
+    "mitre": ["T1190"],
+    "description": "Exploit Public Facing Application",
+    "severity": "CRITICAL",
+    "candidate_tools": [
+      "get_asset",
+      "get_openvas",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Validate OpenSSL version",
+      "Verify patch level",
+      "Rotate exposed credentials",
+      "Review memory disclosure evidence"
+    ]
+  },
+
+  "Infiltration": {
+    "mitre": [
+      "T1105",
+      "T1071",
+      "T1021"
+    ],
+    "description": "Ingress Tool Transfer / C2 Activity",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_openvas",
+      "get_payload",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Review downloaded payloads",
+      "Investigate lateral movement",
+      "Inspect command and control traffic"
+    ]
+  },
+
+  "DDoS": {
+    "mitre": ["T1498"],
+    "description": "Network Denial Of Service",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_traffic_stats",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Validate DDoS mitigation",
+      "Review upstream filtering",
+      "Inspect traffic volume"
+    ]
+  },
+
+  "DoS Hulk": {
+    "mitre": ["T1499"],
+    "description": "Endpoint Denial Of Service",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_web_logs",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Review HTTP flood patterns",
+      "Inspect server utilization",
+      "Check mitigation controls"
+    ]
+  },
+
+  "DoS GoldenEye": {
+    "mitre": ["T1499"],
+    "description": "Endpoint Denial Of Service",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_web_logs",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Inspect web server overload",
+      "Review request patterns"
+    ]
+  },
+
+  "DoS Slowloris": {
+    "mitre": ["T1499"],
+    "description": "Endpoint Denial Of Service",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_web_logs",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Inspect long-lived connections",
+      "Review timeout settings"
+    ]
+  },
+
+  "DoS Slowhttptest": {
+    "mitre": ["T1499"],
+    "description": "Endpoint Denial Of Service",
+    "severity": "HIGH",
+    "candidate_tools": [
+      "get_asset",
+      "get_web_logs",
+      "get_rag_context"
+    ],
+    "typical_remediation": [
+      "Inspect slow HTTP requests",
+      "Validate load balancer protections"
+    ]
+  }
+}
