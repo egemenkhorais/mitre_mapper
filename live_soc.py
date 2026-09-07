@@ -45,6 +45,24 @@ ALERT_THRESHOLD = 0.80
 MODEL_PATH = r"artifacts/xgb_nfv2_model.joblib"
 ENCODER_PATH = r"artifacts/label_encoder.joblib"
 
+
+from layer2_runtime import Layer2PayloadClassifier
+
+layer2_classifier = Layer2PayloadClassifier(
+    model_path="models/layer2_payload_classifier.joblib",
+    confidence_threshold=0.80,
+    max_payload_length=16384,
+    decode_payload=True,
+)
+
+# Exact Layer 1 labels that should be routed to Layer 2.
+# Add the exact web label from print(label_encoder.classes_) if needed.
+LAYER2_WEB_LABELS = {
+    "web attack",
+    "web_attack",
+    "webattack",
+}
+
 # ==========================================================
 # OUTPUT
 # ==========================================================
@@ -171,6 +189,252 @@ def export_flow_packets(
             output_file,
             scapy_packets
         )
+
+# ==========================================================
+# LAYER 2 - ADDITIVE HTTP PAYLOAD CLASSIFICATION
+# ==========================================================
+
+def should_run_layer2(label):
+
+    normalized = str(label).strip().lower().replace("-", "_")
+
+    return normalized in LAYER2_WEB_LABELS
+
+
+def extract_http_request_from_pcap(pcap_file):
+    """
+    Best-effort extraction of unencrypted HTTP request evidence.
+
+    Existing Layer 1 behavior is not changed. If no readable HTTP request
+    exists, this function returns None and Layer 2 reports payload_unavailable.
+    HTTPS payloads remain unavailable unless decrypted before this point.
+    """
+
+    http_capture = None
+
+    try:
+
+        http_capture = pyshark.FileCapture(
+            str(pcap_file),
+            tshark_path=TSHARK_PATH,
+            display_filter="http.request",
+            keep_packets=False,
+            use_json=True
+        )
+
+        requests = []
+
+        for packet in http_capture:
+
+            if not hasattr(packet, "http"):
+                continue
+
+            http = packet.http
+
+            method = getattr(
+                http,
+                "request_method",
+                None
+            )
+
+            uri = getattr(
+                http,
+                "request_uri",
+                None
+            )
+
+            full_uri = getattr(
+                http,
+                "request_full_uri",
+                None
+            )
+
+            body = getattr(
+                http,
+                "file_data",
+                None
+            )
+
+            if body is None:
+                body = getattr(
+                    http,
+                    "request_body",
+                    None
+                )
+
+            path = None
+            query = None
+
+            uri_text = str(
+                full_uri or uri or ""
+            )
+
+            if uri_text:
+
+                if "?" in uri_text:
+                    path, query = uri_text.split(
+                        "?",
+                        1
+                    )
+                else:
+                    path = uri_text
+
+            headers = {}
+
+            content_type = getattr(
+                http,
+                "content_type",
+                None
+            )
+
+            user_agent = getattr(
+                http,
+                "user_agent",
+                None
+            )
+
+            referer = getattr(
+                http,
+                "referer",
+                None
+            )
+
+            if content_type:
+                headers["content-type"] = str(content_type)
+
+            if user_agent:
+                headers["user-agent"] = str(user_agent)
+
+            if referer:
+                headers["referer"] = str(referer)
+
+            if any([
+                method,
+                path,
+                query,
+                body
+            ]):
+
+                requests.append({
+                    "method": str(method) if method else None,
+                    "path": path,
+                    "query": query,
+                    "body": str(body) if body else None,
+                    "headers": headers
+                })
+
+        if not requests:
+            return None
+
+        methods = [
+            item["method"]
+            for item in requests
+            if item.get("method")
+        ]
+
+        paths = [
+            item["path"]
+            for item in requests
+            if item.get("path")
+        ]
+
+        queries = [
+            item["query"]
+            for item in requests
+            if item.get("query")
+        ]
+
+        bodies = [
+            item["body"]
+            for item in requests
+            if item.get("body")
+        ]
+
+        headers = {}
+
+        for item in requests:
+            headers.update(
+                item.get(
+                    "headers",
+                    {}
+                )
+            )
+
+        return {
+            "method": methods[0] if methods else None,
+            "path": "\n".join(paths) if paths else None,
+            "query": "\n".join(queries) if queries else None,
+            "body": "\n".join(bodies) if bodies else None,
+            "headers": headers,
+            "request_count": len(requests)
+        }
+
+    except Exception as exc:
+
+        print(
+            f"LAYER2 HTTP extraction failed: {exc}"
+        )
+
+        return None
+
+    finally:
+
+        if http_capture is not None:
+
+            try:
+                http_capture.close()
+            except:
+                pass
+
+
+def run_layer2_for_exported_flow(
+    layer1_label,
+    pcap_file
+):
+
+    if not should_run_layer2(
+        layer1_label
+    ):
+        return None, None
+
+    evidence = extract_http_request_from_pcap(
+        pcap_file
+    )
+
+    if evidence is None:
+
+        result = layer2_classifier.classify(
+            None
+        )
+
+        return result.to_dict(), None
+
+    result = layer2_classifier.classify_http_request(
+        method=evidence["method"],
+        path=evidence["path"],
+        query=evidence["query"],
+        body=evidence["body"],
+        headers=evidence["headers"]
+    )
+
+    evidence_metadata = {
+        "method": evidence["method"],
+        "path": evidence["path"],
+        "has_query": bool(
+            evidence["query"]
+        ),
+        "has_body": bool(
+            evidence["body"]
+        ),
+        "request_count": evidence[
+            "request_count"
+        ]
+    }
+
+    return (
+        result.to_dict(),
+        evidence_metadata
+    )
 
 # ==========================================================
 # BATCH INFERENCE
@@ -380,6 +644,15 @@ def process_batch():
             pcap_file
         )
 
+        # Additive Layer 2 routing. Existing Layer 1 decision and PCAP
+        # export behavior above is unchanged.
+        layer2_result, http_evidence = (
+            run_layer2_for_exported_flow(
+                label,
+                pcap_file
+            )
+        )
+
         metadata_file = (
             pcap_file.replace(
                 ".pcap",
@@ -414,6 +687,16 @@ def process_batch():
                 int(row["protocol"])
         }
 
+        if layer2_result is not None:
+
+            metadata["layer2"] = (
+                layer2_result
+            )
+
+            metadata["http_evidence"] = (
+                http_evidence
+            )
+
         with open(
             metadata_file,
             "w",
@@ -431,6 +714,15 @@ def process_batch():
             f"{label} "
             f"{confidence:.4f}"
         )
+
+        if layer2_result is not None:
+
+            print(
+                "LAYER2 -> "
+                f"{layer2_result.get('label')} "
+                f"status={layer2_result.get('status')} "
+                f"confidence={layer2_result.get('confidence')}"
+            )
 
     completed_flows = []
 
