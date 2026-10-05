@@ -72,14 +72,22 @@ class Layer2PayloadClassifier:
                 f"Layer 2 model not found: {self.model_path.resolve()}"
             )
 
-        self.model = joblib.load(self.model_path)
+        artifact = joblib.load(model_path)
+
+        # If the artifact is a dictionary, unpack the components
+        if isinstance(artifact, dict):
+            self.model = artifact.get("model")
+
+            # If your runtime also needs the vectorizer or encoder, you can assign them here:
+            if "vectorizer" in artifact:
+                self.vectorizer = artifact["vectorizer"]
+            if "label_encoder" in artifact:
+                self.label_encoder = artifact["label_encoder"]
+        else:
+            self.model = artifact
+
         if not hasattr(self.model, "predict"):
             raise TypeError("Model artifact does not provide predict()")
-        if not hasattr(self.model, "predict_proba"):
-            raise TypeError(
-                "Model artifact does not provide predict_proba(). "
-                "Use the LogisticRegression pipeline artifact."
-            )
 
         self.classes = self._get_classes()
         LOGGER.info(

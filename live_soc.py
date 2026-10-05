@@ -33,7 +33,7 @@ from netflowautomationtest import extract_features_from_pcap
 
 TSHARK_PATH = r"C:\Program Files\Wireshark\tshark.exe"
 
-INTERFACE = "4"
+INTERFACE = "en0"
 
 FLOW_TIMEOUT = 3
 
@@ -45,11 +45,19 @@ ALERT_THRESHOLD = 0.80
 MODEL_PATH = r"artifacts/xgb_nfv2_model.joblib"
 ENCODER_PATH = r"artifacts/label_encoder.joblib"
 
-
 from layer2_runtime import Layer2PayloadClassifier
 
+from behaviour_engine import (
+    update_host_state,
+    detect_behaviors
+)
+
+from correlation_engine import (
+    correlate
+)
+
 layer2_classifier = Layer2PayloadClassifier(
-    model_path="models/layer2_payload_classifier.joblib",
+    model_path="models/payload_attack_classifier_v2.joblib",
     confidence_threshold=0.80,
     max_payload_length=16384,
     decode_payload=True,
@@ -87,12 +95,12 @@ active_flows = {}
 
 completed_flows = []
 
+
 # ==========================================================
 # FLOW KEY
 # ==========================================================
 
 def get_flow_key(packet):
-
     try:
 
         if not hasattr(packet, "ip"):
@@ -140,15 +148,15 @@ def get_flow_key(packet):
     except:
         return None
 
+
 # ==========================================================
 # DECISION
 # ==========================================================
 
 def decide(
-    label,
-    confidence
+        label,
+        confidence
 ):
-
     if label == "Benign":
         return "BENIGN"
 
@@ -157,15 +165,15 @@ def decide(
 
     return "ALERT"
 
+
 # ==========================================================
 # EXPORT FLOW
 # ==========================================================
 
 def export_flow_packets(
-    packets,
-    output_file
+        packets,
+        output_file
 ):
-
     scapy_packets = []
 
     for pkt in packets:
@@ -184,18 +192,17 @@ def export_flow_packets(
             pass
 
     if scapy_packets:
-
         wrpcap(
             output_file,
             scapy_packets
         )
+
 
 # ==========================================================
 # LAYER 2 - ADDITIVE HTTP PAYLOAD CLASSIFICATION
 # ==========================================================
 
 def should_run_layer2(label):
-
     normalized = str(label).strip().lower().replace("-", "_")
 
     return normalized in LAYER2_WEB_LABELS
@@ -314,7 +321,6 @@ def extract_http_request_from_pcap(pcap_file):
                 query,
                 body
             ]):
-
                 requests.append({
                     "method": str(method) if method else None,
                     "path": path,
@@ -388,12 +394,11 @@ def extract_http_request_from_pcap(pcap_file):
 
 
 def run_layer2_for_exported_flow(
-    layer1_label,
-    pcap_file
+        layer1_label,
+        pcap_file
 ):
-
     if not should_run_layer2(
-        layer1_label
+            layer1_label
     ):
         return None, None
 
@@ -402,7 +407,6 @@ def run_layer2_for_exported_flow(
     )
 
     if evidence is None:
-
         result = layer2_classifier.classify(
             None
         )
@@ -436,12 +440,12 @@ def run_layer2_for_exported_flow(
         evidence_metadata
     )
 
+
 # ==========================================================
 # BATCH INFERENCE
 # ==========================================================
 
 def process_batch():
-
     global completed_flows
 
     if len(completed_flows) < FLOW_BATCH_SIZE:
@@ -454,7 +458,6 @@ def process_batch():
     batch_packets = []
 
     for _, flow_data in completed_flows:
-
         batch_packets.extend(
             flow_data["packets"]
         )
@@ -515,7 +518,7 @@ def process_batch():
     )
 
     for flow_index in range(
-        len(features)
+            len(features)
     ):
 
         flow_key = flow_keys[
@@ -544,10 +547,9 @@ def process_batch():
         }
 
         for rank, class_index in enumerate(
-            top3_indices[flow_index],
-            start=1
+                top3_indices[flow_index],
+                start=1
         ):
-
             label = (
                 label_encoder
                 .inverse_transform(
@@ -590,11 +592,11 @@ def process_batch():
     )
 
     # ======================================
-    # EXPORT REVIEW / ALERT FLOWS
+    # EXPORT REVIEW / ALERT FLOWS & CORRELATION
     # ======================================
 
     for _, row in (
-        prediction_report.iterrows()
+            prediction_report.iterrows()
     ):
 
         label = row[
@@ -607,122 +609,202 @@ def process_batch():
             ]
         )
 
+        src_ip = row[
+            "src_ip"
+        ]
+
+        flow_info = {
+            "src_ip": src_ip,
+            "dst_ip": row["dst_ip"],
+            "src_port": int(row["src_port"]),
+            "dst_port": int(row["dst_port"]),
+            "protocol": int(row["protocol"]),
+            "timestamp": time.time()
+        }
+
+        update_host_state(
+            flow_info
+        )
+
+        behavioral_findings = detect_behaviors(
+            src_ip
+        )
+
         decision = decide(
             label,
             confidence
         )
 
-        if decision == "BENIGN":
-            continue
+        layer2_result = None
+        http_evidence = None
+        pcap_file = None
 
-        flow_key = (
-            row["src_ip"],
-            row["dst_ip"],
-            row["src_port"],
-            row["dst_port"],
-            row["protocol"]
-        )
+        if decision != "BENIGN":
+            flow_key = (
+                row["src_ip"],
+                row["dst_ip"],
+                row["src_port"],
+                row["dst_port"],
+                row["protocol"]
+            )
 
-        packets = flows[
-            flow_key
-        ]
+            packets = flows[
+                flow_key
+            ]
 
-        timestamp = int(
-            time.time()
-        )
+            timestamp = int(
+                time.time()
+            )
 
-        pcap_file = (
-            f"alerts/"
-            f"{decision}_"
-            f"{label}_"
-            f"{confidence:.4f}_"
-            f"{timestamp}.pcap"
-        )
+            pcap_file = (
+                f"alerts/"
+                f"{decision}_"
+                f"{label}_"
+                f"{confidence:.4f}_"
+                f"{timestamp}.pcap"
+            )
 
-        export_flow_packets(
-            packets,
-            pcap_file
-        )
-
-        # Additive Layer 2 routing. Existing Layer 1 decision and PCAP
-        # export behavior above is unchanged.
-        layer2_result, http_evidence = (
-            run_layer2_for_exported_flow(
-                label,
+            export_flow_packets(
+                packets,
                 pcap_file
             )
-        )
 
-        metadata_file = (
-            pcap_file.replace(
-                ".pcap",
-                ".json"
+            layer2_result, http_evidence = (
+                run_layer2_for_exported_flow(
+                    label,
+                    pcap_file
+                )
             )
-        )
 
-        metadata = {
-
-            "decision":
-                decision,
-
-            "label":
-                label,
-
-            "confidence":
-                confidence,
-
-            "src_ip":
-                row["src_ip"],
-
-            "dst_ip":
-                row["dst_ip"],
-
-            "src_port":
-                int(row["src_port"]),
-
-            "dst_port":
-                int(row["dst_port"]),
-
-            "protocol":
-                int(row["protocol"])
+        xgb_result = {
+            "label": label,
+            "confidence": confidence
         }
 
-        if layer2_result is not None:
-
-            metadata["layer2"] = (
-                layer2_result
-            )
-
-            metadata["http_evidence"] = (
-                http_evidence
-            )
-
-        with open(
-            metadata_file,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            json.dump(
-                metadata,
-                f,
-                indent=4
-            )
-
-        print(
-            f"{decision} -> "
-            f"{label} "
-            f"{confidence:.4f}"
+        correlation_data = correlate(
+            xgb_result=xgb_result,
+            payload_result=layer2_result,
+            behavioral_findings=behavioral_findings
         )
 
-        if layer2_result is not None:
+        is_suspicious = correlation_data.get(
+            "suspicious_activity",
+            False
+        )
+
+        if decision != "BENIGN" or is_suspicious:
+
+            if decision == "BENIGN":
+                decision = "BEHAVIOR_ALERT"
+
+                flow_key = (
+                    row["src_ip"],
+                    row["dst_ip"],
+                    row["src_port"],
+                    row["dst_port"],
+                    row["protocol"]
+                )
+
+                packets = flows[
+                    flow_key
+                ]
+
+                timestamp = int(
+                    time.time()
+                )
+
+                pcap_file = (
+                    f"alerts/"
+                    f"{decision}_"
+                    f"{label}_"
+                    f"{confidence:.4f}_"
+                    f"{timestamp}.pcap"
+                )
+
+                export_flow_packets(
+                    packets,
+                    pcap_file
+                )
+
+            metadata_file = (
+                pcap_file.replace(
+                    ".pcap",
+                    ".json"
+                )
+            )
+
+            metadata = {
+
+                "decision":
+                    decision,
+
+                "label":
+                    label,
+
+                "confidence":
+                    confidence,
+
+                "src_ip":
+                    row["src_ip"],
+
+                "dst_ip":
+                    row["dst_ip"],
+
+                "src_port":
+                    int(row["src_port"]),
+
+                "dst_port":
+                    int(row["dst_port"]),
+
+                "protocol":
+                    int(row["protocol"]),
+
+                "correlation_summary":
+                    correlation_data
+            }
+
+            if layer2_result is not None:
+                metadata["layer2"] = (
+                    layer2_result
+                )
+
+                metadata["http_evidence"] = (
+                    http_evidence
+                )
+
+            with open(
+                    metadata_file,
+                    "w",
+                    encoding="utf-8"
+            ) as f:
+
+                json.dump(
+                    metadata,
+                    f,
+                    indent=4
+                )
 
             print(
-                "LAYER2 -> "
-                f"{layer2_result.get('label')} "
-                f"status={layer2_result.get('status')} "
-                f"confidence={layer2_result.get('confidence')}"
+                f"{decision} -> "
+                f"{label} "
+                f"{confidence:.4f} "
+                f"| Risk: {correlation_data.get('risk_score', 0)} "
+                f"({correlation_data.get('severity', 'informational')})"
             )
+
+            if layer2_result is not None:
+                print(
+                    "LAYER2 -> "
+                    f"{layer2_result.get('label')} "
+                    f"status={layer2_result.get('status')} "
+                    f"confidence={layer2_result.get('confidence')}"
+                )
+
+            if behavioral_findings:
+                print(
+                    f"BEHAVIOR -> {len(behavioral_findings)} "
+                    f"anomalies detected for {src_ip}"
+                )
 
     completed_flows = []
 
@@ -730,6 +812,7 @@ def process_batch():
         temp_pcap.unlink()
     except:
         pass
+
 
 # ==========================================================
 # START CAPTURE
@@ -760,7 +843,6 @@ for packet in capture.sniff_continuously():
     now = time.time()
 
     if flow_key not in active_flows:
-
         active_flows[
             flow_key
         ] = {
@@ -785,17 +867,16 @@ for packet in capture.sniff_continuously():
         print(f"Packets={packet_counter}")
 
     for key in list(
-        active_flows.keys()
+            active_flows.keys()
     ):
 
         idle = (
-            now
-            - active_flows[key]
-            ["last_seen"]
+                now
+                - active_flows[key]
+                ["last_seen"]
         )
 
         if idle > FLOW_TIMEOUT:
-
             completed_flows.append(
                 (
                     key,
@@ -806,7 +887,6 @@ for packet in capture.sniff_continuously():
             del active_flows[key]
 
     if packet_counter % 500 == 0:
-
         print(
             f"Packets={packet_counter} "
             f"Active={len(active_flows)} "

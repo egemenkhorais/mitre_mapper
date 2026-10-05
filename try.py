@@ -1,7 +1,7 @@
-from scapy.all import rdpcap
+import joblib
 
-packets = rdpcap("deneme.pcapng")
+artifact = joblib.load("models/payload_attack_classifier_v2.joblib")
+print("Type of artifact:", type(artifact))
 
-print("Packet Count:", len(packets))
-print("First Packet:")
-print(packets[0].summary())
+if isinstance(artifact, dict):
+    print("Keys in dictionary:", artifact.keys())
