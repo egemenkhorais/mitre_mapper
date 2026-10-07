@@ -1,0 +1,30 @@
+{
+  "accuracy": 0.9422443941575808,
+  "balanced_accuracy": 0.928310753806412,
+  "macro_f1": 0.9310253825295519,
+  "n_classes": 16,
+  "classes": [
+    "Backdoor",
+    "Benign",
+    "Bot",
+    "Brute Force",
+    "DDoS",
+    "DoS",
+    "Exploitation",
+    "Fuzzers",
+    "Infiltration",
+    "MITM",
+    "Ransomware",
+    "Reconnaissance",
+    "Theft",
+    "Web Attack",
+    "Worms",
+    "password"
+  ],
+  "dropped_classes": [
+    "Generic"
+  ],
+  "n_train": 77773,
+  "n_test": 19444,
+  "n_features": 39
+}

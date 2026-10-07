@@ -1,24 +1,36 @@
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from threading import Lock
+import time
 
+
+# ==========================================================
+# CONFIG
+# ==========================================================
+
+BEHAVIOR_WINDOW_SECONDS = 300
+MAX_RECENT_FLOWS = 10_000
+
+
+# ==========================================================
+# HOST STATE
+# ==========================================================
 
 HOST_STATE = defaultdict(
     lambda: {
-        "flows": 0,
-        "dns_queries": 0,
-        "ldap_queries": 0,
-        "smb_connections": 0,
-        "rdp_connections": 0,
-        "targets": set(),
-        "ports": set(),
+        "recent_flows": deque(
+            maxlen=MAX_RECENT_FLOWS
+        ),
         "last_seen": None,
-        "recent_flows": deque(maxlen=10_000),
     }
 )
 
 HOST_STATE_LOCK = Lock()
 
+
+# ==========================================================
+# HELPERS
+# ==========================================================
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -31,144 +43,506 @@ def normalize_port(value):
         return 0
 
 
-def update_host_state(flow):
-    """
-    Beklenen flow örneği:
+def normalize_timestamp(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return time.time()
 
-    {
-        "src_ip": "10.10.10.10",
-        "dst_ip": "10.10.10.20",
-        "src_port": 51000,
-        "dst_port": 445,
-        "protocol": 6,
-        "timestamp": 1234567890.0
+
+def remove_expired_flows(
+    recent_flows,
+    current_time
+):
+    cutoff = (
+        current_time
+        - BEHAVIOR_WINDOW_SECONDS
+    )
+
+    while recent_flows:
+
+        oldest_timestamp = (
+            recent_flows[0]
+            .get(
+                "timestamp",
+                0
+            )
+        )
+
+        if oldest_timestamp >= cutoff:
+            break
+
+        recent_flows.popleft()
+
+
+def build_snapshot(recent_flows):
+    targets = set()
+    ports = set()
+
+    dns_queries = 0
+    ldap_queries = 0
+    smb_connections = 0
+    rdp_connections = 0
+
+    tcp_flows = 0
+    udp_flows = 0
+
+    for flow in recent_flows:
+
+        dst_ip = flow.get(
+            "dst_ip"
+        )
+
+        dst_port = normalize_port(
+            flow.get(
+                "dst_port",
+                0
+            )
+        )
+
+        protocol = normalize_port(
+            flow.get(
+                "protocol",
+                0
+            )
+        )
+
+        if dst_ip:
+            targets.add(
+                dst_ip
+            )
+
+        if dst_port:
+            ports.add(
+                dst_port
+            )
+
+        if protocol == 6:
+            tcp_flows += 1
+
+        elif protocol == 17:
+            udp_flows += 1
+
+        if dst_port == 53:
+            dns_queries += 1
+
+        elif dst_port in (
+            389,
+            636
+        ):
+            ldap_queries += 1
+
+        elif dst_port == 445:
+            smb_connections += 1
+
+        elif dst_port == 3389:
+            rdp_connections += 1
+
+    return {
+        "window_seconds":
+            BEHAVIOR_WINDOW_SECONDS,
+
+        "flows":
+            len(recent_flows),
+
+        "dns_queries":
+            dns_queries,
+
+        "ldap_queries":
+            ldap_queries,
+
+        "smb_connections":
+            smb_connections,
+
+        "rdp_connections":
+            rdp_connections,
+
+        "tcp_flows":
+            tcp_flows,
+
+        "udp_flows":
+            udp_flows,
+
+        "unique_targets":
+            len(targets),
+
+        "unique_ports":
+            len(ports),
+
+        "targets":
+            sorted(targets),
+
+        "ports":
+            sorted(ports),
     }
-    """
 
-    src = str(flow.get("src_ip", ""))
-    dst = str(flow.get("dst_ip", ""))
+
+# ==========================================================
+# UPDATE HOST STATE
+# ==========================================================
+
+def update_host_state(flow):
+    src = str(
+        flow.get(
+            "src_ip",
+            ""
+        )
+    ).strip()
+
+    dst = str(
+        flow.get(
+            "dst_ip",
+            ""
+        )
+    ).strip()
 
     if not src or not dst:
         return
 
-    src_port = normalize_port(flow.get("src_port", 0))
-    dst_port = normalize_port(flow.get("dst_port", 0))
-    protocol = normalize_port(flow.get("protocol", 0))
-
     event = {
-        "src_ip": src,
-        "dst_ip": dst,
-        "src_port": src_port,
-        "dst_port": dst_port,
-        "protocol": protocol,
-        "timestamp": flow.get("timestamp"),
+        "src_ip":
+            src,
+
+        "dst_ip":
+            dst,
+
+        "src_port":
+            normalize_port(
+                flow.get(
+                    "src_port",
+                    0
+                )
+            ),
+
+        "dst_port":
+            normalize_port(
+                flow.get(
+                    "dst_port",
+                    0
+                )
+            ),
+
+        "protocol":
+            normalize_port(
+                flow.get(
+                    "protocol",
+                    0
+                )
+            ),
+
+        "timestamp":
+            normalize_timestamp(
+                flow.get(
+                    "timestamp"
+                )
+            ),
     }
 
+    current_time = time.time()
+
     with HOST_STATE_LOCK:
+
         state = HOST_STATE[src]
 
-        state["flows"] += 1
-        state["targets"].add(dst)
-        state["ports"].add(dst_port)
-        state["recent_flows"].append(event)
+        remove_expired_flows(
+            state["recent_flows"],
+            current_time
+        )
 
-        if dst_port == 53:
-            state["dns_queries"] += 1
+        state[
+            "recent_flows"
+        ].append(
+            event
+        )
 
-        elif dst_port in (389, 636):
-            state["ldap_queries"] += 1
+        state[
+            "last_seen"
+        ] = utc_now()
 
-        elif dst_port == 445:
-            state["smb_connections"] += 1
 
-        elif dst_port == 3389:
-            state["rdp_connections"] += 1
-
-        state["last_seen"] = utc_now()
-
+# ==========================================================
+# DETECT BEHAVIORS
+# ==========================================================
 
 def detect_behaviors(src_ip):
+    src_ip = str(
+        src_ip
+    ).strip()
+
+    current_time = time.time()
+
     with HOST_STATE_LOCK:
+
         if src_ip not in HOST_STATE:
             return []
 
-        state = HOST_STATE[src_ip]
+        state = HOST_STATE[
+            src_ip
+        ]
 
-        snapshot = {
-            "flows": state["flows"],
-            "dns_queries": state["dns_queries"],
-            "ldap_queries": state["ldap_queries"],
-            "smb_connections": state["smb_connections"],
-            "rdp_connections": state["rdp_connections"],
-            "unique_targets": len(state["targets"]),
-            "unique_ports": len(state["ports"]),
-            "last_seen": state["last_seen"],
-        }
+        remove_expired_flows(
+            state["recent_flows"],
+            current_time
+        )
+
+        snapshot = build_snapshot(
+            list(
+                state[
+                    "recent_flows"
+                ]
+            )
+        )
 
     findings = []
 
-    if snapshot["unique_targets"] > 100:
+    # ------------------------------------------------------
+    # INTERNAL NETWORK SCAN
+    # ------------------------------------------------------
+
+    if (
+        snapshot[
+            "unique_targets"
+        ] > 100
+    ):
         findings.append(
             {
-                "behavior": "internal_network_scan",
-                "mitre": "T1018",
-                "score": 30,
+                "behavior":
+                    "internal_network_scan",
+
+                "score":
+                    30,
+
+                "confidence":
+                    min(
+                        snapshot[
+                            "unique_targets"
+                        ] / 200,
+                        1.0
+                    ),
+
                 "evidence": {
-                    "unique_targets": snapshot["unique_targets"],
-                    "unique_ports": snapshot["unique_ports"],
-                    "total_flows": snapshot["flows"],
+                    "window_seconds":
+                        snapshot[
+                            "window_seconds"
+                        ],
+
+                    "unique_targets":
+                        snapshot[
+                            "unique_targets"
+                        ],
+
+                    "unique_ports":
+                        snapshot[
+                            "unique_ports"
+                        ],
+
+                    "total_flows":
+                        snapshot[
+                            "flows"
+                        ],
+
+                    "ports":
+                        snapshot[
+                            "ports"
+                        ],
                 },
             }
         )
 
-    if snapshot["ldap_queries"] > 50:
+    # ------------------------------------------------------
+    # LDAP ENUMERATION
+    # ------------------------------------------------------
+
+    if (
+        snapshot[
+            "ldap_queries"
+        ] > 50
+    ):
         findings.append(
             {
-                "behavior": "ldap_enumeration",
-                "mitre": "T1087",
-                "score": 30,
+                "behavior":
+                    "ldap_enumeration",
+
+                "score":
+                    30,
+
+                "confidence":
+                    min(
+                        snapshot[
+                            "ldap_queries"
+                        ] / 100,
+                        1.0
+                    ),
+
                 "evidence": {
-                    "ldap_queries": snapshot["ldap_queries"],
-                    "unique_targets": snapshot["unique_targets"],
+                    "window_seconds":
+                        snapshot[
+                            "window_seconds"
+                        ],
+
+                    "ldap_queries":
+                        snapshot[
+                            "ldap_queries"
+                        ],
+
+                    "unique_targets":
+                        snapshot[
+                            "unique_targets"
+                        ],
+
+                    "ports": [
+                        port
+                        for port in (
+                            389,
+                            636
+                        )
+                        if port in snapshot[
+                            "ports"
+                        ]
+                    ],
                 },
             }
         )
 
-    if snapshot["dns_queries"] > 500:
+    # ------------------------------------------------------
+    # DNS ANOMALY
+    # ------------------------------------------------------
+
+    if (
+        snapshot[
+            "dns_queries"
+        ] > 500
+    ):
         findings.append(
             {
-                "behavior": "dns_anomaly",
-                "mitre": "T1071.004",
-                "score": 20,
+                "behavior":
+                    "dns_anomaly",
+
+                "score":
+                    20,
+
+                "confidence":
+                    min(
+                        snapshot[
+                            "dns_queries"
+                        ] / 1000,
+                        1.0
+                    ),
+
                 "evidence": {
-                    "dns_queries": snapshot["dns_queries"],
-                    "total_flows": snapshot["flows"],
+                    "window_seconds":
+                        snapshot[
+                            "window_seconds"
+                        ],
+
+                    "dns_queries":
+                        snapshot[
+                            "dns_queries"
+                        ],
+
+                    "total_flows":
+                        snapshot[
+                            "flows"
+                        ],
+
+                    "unique_targets":
+                        snapshot[
+                            "unique_targets"
+                        ],
                 },
             }
         )
 
-    if snapshot["smb_connections"] > 100:
+    # ------------------------------------------------------
+    # SMB LATERAL MOVEMENT
+    # ------------------------------------------------------
+
+    if (
+        snapshot[
+            "smb_connections"
+        ] > 100
+    ):
         findings.append(
             {
-                "behavior": "possible_lateral_movement",
-                "mitre": "T1021.002",
-                "score": 25,
+                "behavior":
+                    "possible_lateral_movement",
+
+                "score":
+                    25,
+
+                "confidence":
+                    min(
+                        snapshot[
+                            "smb_connections"
+                        ] / 200,
+                        1.0
+                    ),
+
                 "evidence": {
-                    "smb_connections": snapshot["smb_connections"],
-                    "unique_targets": snapshot["unique_targets"],
+                    "window_seconds":
+                        snapshot[
+                            "window_seconds"
+                        ],
+
+                    "smb_connections":
+                        snapshot[
+                            "smb_connections"
+                        ],
+
+                    "unique_targets":
+                        snapshot[
+                            "unique_targets"
+                        ],
+
+                    "destination_port":
+                        445,
                 },
             }
         )
 
-    if snapshot["rdp_connections"] > 50:
+    # ------------------------------------------------------
+    # RDP SPREAD
+    # ------------------------------------------------------
+
+    if (
+        snapshot[
+            "rdp_connections"
+        ] > 50
+    ):
         findings.append(
             {
-                "behavior": "rdp_spread",
-                "mitre": "T1021.001",
-                "score": 25,
+                "behavior":
+                    "rdp_spread",
+
+                "score":
+                    25,
+
+                "confidence":
+                    min(
+                        snapshot[
+                            "rdp_connections"
+                        ] / 100,
+                        1.0
+                    ),
+
                 "evidence": {
-                    "rdp_connections": snapshot["rdp_connections"],
-                    "unique_targets": snapshot["unique_targets"],
+                    "window_seconds":
+                        snapshot[
+                            "window_seconds"
+                        ],
+
+                    "rdp_connections":
+                        snapshot[
+                            "rdp_connections"
+                        ],
+
+                    "unique_targets":
+                        snapshot[
+                            "unique_targets"
+                        ],
+
+                    "destination_port":
+                        3389,
                 },
             }
         )
@@ -176,30 +550,57 @@ def detect_behaviors(src_ip):
     return findings
 
 
+# ==========================================================
+# GET HOST STATE
+# ==========================================================
+
 def get_host_state(src_ip):
+    src_ip = str(
+        src_ip
+    ).strip()
+
+    current_time = time.time()
+
     with HOST_STATE_LOCK:
+
         if src_ip not in HOST_STATE:
             return None
 
-        state = HOST_STATE[src_ip]
+        state = HOST_STATE[
+            src_ip
+        ]
+
+        remove_expired_flows(
+            state["recent_flows"],
+            current_time
+        )
+
+        snapshot = build_snapshot(
+            list(
+                state[
+                    "recent_flows"
+                ]
+            )
+        )
 
         return {
-            "flows": state["flows"],
-            "dns_queries": state["dns_queries"],
-            "ldap_queries": state["ldap_queries"],
-            "smb_connections": state["smb_connections"],
-            "rdp_connections": state["rdp_connections"],
-            "unique_targets": len(state["targets"]),
-            "unique_ports": len(state["ports"]),
-            "targets": sorted(state["targets"]),
-            "ports": sorted(state["ports"]),
+            **snapshot,
+
             "last_seen": (
-                state["last_seen"].isoformat()
-                if state["last_seen"] is not None
+                state[
+                    "last_seen"
+                ].isoformat()
+                if state[
+                    "last_seen"
+                ] is not None
                 else None
             ),
         }
 
+
+# ==========================================================
+# RESET
+# ==========================================================
 
 def reset_host_state():
     with HOST_STATE_LOCK:
