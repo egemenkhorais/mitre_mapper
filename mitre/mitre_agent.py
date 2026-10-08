@@ -4,7 +4,10 @@ import time
 
 import requests
 
-from mitre_retriever import MitreRetriever
+try:
+    from .mitre_retriever import MitreRetriever
+except ImportError:
+    from mitre_retriever import MitreRetriever
 from mitre_multi_retriever import retrieve_candidates
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"

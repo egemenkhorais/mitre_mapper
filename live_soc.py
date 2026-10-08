@@ -2,12 +2,18 @@
 
 from pathlib import Path
 import asyncio
+import copy
+import functools
 import json
+import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 import traceback
+from collections import defaultdict, deque
+from contextlib import contextmanager
 
 import joblib
 import numpy as np
@@ -27,10 +33,57 @@ from behaviour_engine import (
 
 from correlation_engine import correlate
 
-from mitre.mitre_agent import (
-    analyze_mitre,
-    warm_up,
-)
+# ==========================================================
+# PROJECT PATHS
+# ==========================================================
+
+# Tüm yollar bu dosyanın klasörüne göre çözülür; PyCharm'ın
+# Working directory ayarı artık önemli değil.
+BASE_DIR = Path(__file__).resolve().parent
+MITRE_DIR = BASE_DIR / "mitre"
+
+for _path in (BASE_DIR, MITRE_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
+
+
+@contextmanager
+def working_directory(path):
+    """
+    mitre/ kodu '../cache/...' gibi CWD'ye göre göreli yollar kullanıyor.
+    Bu kod mitre/ klasöründen çalışıyormuş gibi davranması için
+    CWD'yi geçici olarak değiştirir, sonra geri alır.
+    """
+    previous = Path.cwd()
+    os.chdir(str(path))
+
+    try:
+        yield
+    finally:
+        os.chdir(str(previous))
+
+
+# mitre_agent import edilirken MitreRetriever() oluşuyor ve
+# ../cache/attack_enterprise.json okunuyor, bu yüzden import da
+# mitre/ klasörü CWD iken yapılmalı.
+with working_directory(MITRE_DIR):
+    from mitre.mitre_agent import (
+        analyze_mitre as _analyze_mitre,
+        warm_up as _warm_up,
+    )
+
+
+def _run_in_mitre_dir(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        with working_directory(MITRE_DIR):
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+analyze_mitre = _run_in_mitre_dir(_analyze_mitre)
+warm_up = _run_in_mitre_dir(_warm_up)
 
 
 # ==========================================================
@@ -63,14 +116,46 @@ MITRE_WARMUP_ENABLED = True
 # Ham analyze_mitre çıktısını terminalde gösterir.
 MITRE_DEBUG = True
 
-MODEL_PATH = Path("artifacts/xgb_nfv2_model.joblib")
-ENCODER_PATH = Path("artifacts/label_encoder.joblib")
+MODEL_PATH = BASE_DIR / "artifacts" / "xgb_nfv2_model.joblib"
+ENCODER_PATH = BASE_DIR / "artifacts" / "label_encoder.joblib"
 
-LAYER2_MODEL_PATH = Path(
-    "models/payload_attack_classifier_v2.joblib"
+LAYER2_MODEL_PATH = (
+    BASE_DIR / "models" / "payload_attack_classifier_v2.joblib"
 )
 
-ALERTS_DIRECTORY = Path("alerts")
+ALERTS_DIRECTORY = BASE_DIR / "alerts"
+
+
+# ==========================================================
+# MITRE GATING / CACHE CONFIG
+# ==========================================================
+
+# Bu eşiğin altındaki REVIEW flow'ları, başka kanıt yoksa Qwen'e gitmez.
+MITRE_MIN_CONFIDENCE = 0.80
+
+# Korelasyon bu seviyenin altındaysa tek başına yeterli kanıt sayılmaz.
+MITRE_MIN_SEVERITY = "medium"
+MITRE_MIN_RISK_SCORE = 40
+
+# Aynı imza için sonucu ne kadar süre yeniden kullan (saniye).
+MITRE_CACHE_TTL = 300
+MITRE_INSUFFICIENT_TTL = 900
+MITRE_CACHE_MAX_ENTRIES = 512
+
+# Aynı kaynak IP için iki Qwen çağrısı arasındaki minimum süre.
+MITRE_MIN_INTERVAL_PER_SOURCE = 30
+
+# Kaynak IP aktivite penceresi (port/host sayımı için).
+SOURCE_WINDOW_SECONDS = 60
+SOURCE_MAX_EVENTS = 2000
+
+SEVERITY_RANK = {
+    "informational": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 
 
 # ==========================================================
@@ -391,7 +476,6 @@ def convert_to_scapy_packets(packets):
             )
 
     return scapy_packets
-
 
 
 def export_flow_packets(
@@ -997,7 +1081,7 @@ def get_mitre_candidates(mitre_output):
 
 
 # ==========================================================
-# MITRE ATT&CK ANALYSIS
+# MITRE ATT&CK ANALYSIS (gerçek Qwen çağrısı)
 # ==========================================================
 
 def run_mitre_analysis(
@@ -1008,6 +1092,7 @@ def run_mitre_analysis(
         flow_info=None,
         layer2_result=None,
         http_evidence=None,
+        activity=None,
 ):
     flow_info = (
         flow_info
@@ -1026,6 +1111,13 @@ def run_mitre_analysis(
         if isinstance(http_evidence, dict)
         else {}
     )
+
+    activity = (
+        activity
+        if isinstance(activity, dict)
+        else {}
+    )
+
     if not MITRE_ENABLED:
         return {
             "status": "disabled",
@@ -1113,6 +1205,23 @@ def run_mitre_analysis(
                 ),
                 "http_request_count": http_evidence.get(
                     "request_count",
+                    0,
+                ),
+
+                # Source activity (scan/recon kanıtı)
+                "activity_window_seconds": activity.get(
+                    "window_seconds"
+                ),
+                "recent_flow_count": activity.get(
+                    "flow_count",
+                    0,
+                ),
+                "unique_dst_ips": activity.get(
+                    "unique_dst_ips",
+                    0,
+                ),
+                "unique_dst_ports": activity.get(
+                    "unique_dst_ports",
                     0,
                 ),
             },
@@ -1277,6 +1386,346 @@ def run_mitre_analysis(
 
 
 # ==========================================================
+# SOURCE ACTIVITY (kanıtı zenginleştirir)
+# ==========================================================
+
+source_activity = defaultdict(
+    lambda: deque(maxlen=SOURCE_MAX_EVENTS)
+)
+
+
+def update_source_activity(flow_info):
+    """
+    Kaynak IP'nin son SOURCE_WINDOW_SECONDS içindeki davranışını özetler.
+    Reconnaissance için asıl kanıt budur: kaç farklı port / host.
+    """
+    src_ip = flow_info["src_ip"]
+    now = flow_info.get("timestamp") or time.time()
+
+    events = source_activity[src_ip]
+
+    events.append(
+        (
+            now,
+            flow_info["dst_ip"],
+            flow_info["dst_port"],
+            flow_info["protocol"],
+        )
+    )
+
+    cutoff = now - SOURCE_WINDOW_SECONDS
+
+    while events and events[0][0] < cutoff:
+        events.popleft()
+
+    return {
+        "window_seconds": SOURCE_WINDOW_SECONDS,
+        "flow_count": len(events),
+        "unique_dst_ips": len({e[1] for e in events}),
+        "unique_dst_ports": len({e[2] for e in events}),
+    }
+
+
+def cleanup_source_activity():
+    cutoff = time.time() - SOURCE_WINDOW_SECONDS
+
+    for src_ip in list(source_activity.keys()):
+        events = source_activity[src_ip]
+
+        if not events or events[-1][0] < cutoff:
+            del source_activity[src_ip]
+
+
+# ==========================================================
+# MITRE GATE + CACHE
+# ==========================================================
+
+mitre_cache = {}               # signature -> (stored_at, ttl, result)
+mitre_last_run_by_source = {}  # src_ip -> (monotonic_time, result)
+
+LAYER2_NON_ATTACK_LABELS = {
+    "",
+    "none",
+    "unknown",
+    "benign",
+    "normal",
+    "uncertain",
+}
+
+CACHEABLE_STATUSES = (
+    "completed",
+    "insufficient_evidence",
+    "empty_candidates",
+)
+
+
+def _skipped_result(status, message):
+    return {
+        "status": status,
+        "result": {"techniques": []},
+        "candidates": [],
+        "message": message,
+        "timing": {
+            "retrieval_seconds": 0.0,
+            "qwen_seconds": 0.0,
+            "total_seconds": 0.0,
+        },
+    }
+
+
+def has_layer2_attack_evidence(layer2_result):
+    if not isinstance(layer2_result, dict):
+        return False
+
+    label = normalize_layer2_label(
+        layer2_result.get("label") or ""
+    )
+
+    return label not in LAYER2_NON_ATTACK_LABELS
+
+
+def should_run_mitre(
+        confidence,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+):
+    """
+    Qwen'i çalıştırmaya değecek kadar kanıt var mı?
+    Sadece (etiket + düşük güven) ile Qwen çağrılmaz.
+    """
+    if behavioral_findings:
+        return True, "behavioral_findings"
+
+    severity = str(
+        correlation_data.get("severity", "informational")
+    ).lower()
+
+    if (
+        SEVERITY_RANK.get(severity, 0)
+        >= SEVERITY_RANK[MITRE_MIN_SEVERITY]
+    ):
+        return True, f"correlation_severity={severity}"
+
+    if (
+        float(correlation_data.get("risk_score", 0) or 0)
+        >= MITRE_MIN_RISK_SCORE
+    ):
+        return True, "correlation_risk_score"
+
+    if has_layer2_attack_evidence(layer2_result):
+        return True, "layer2_attack"
+
+    if confidence >= MITRE_MIN_CONFIDENCE:
+        return True, "high_layer1_confidence"
+
+    return False, "low_confidence_and_no_supporting_evidence"
+
+
+def _bucket(value):
+    # 1,2,3,4-7,8-15,16-31... -> tarama büyüdükçe imza değişir,
+    # ama her yeni porta tekrar çağrı yapılmaz.
+    return int(value).bit_length()
+
+
+def build_mitre_signature(
+        label,
+        flow_info,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+        http_evidence,
+        activity,
+):
+    behaviors = tuple(
+        sorted(
+            {
+                str(item.get("behavior"))
+                for item in behavioral_findings or []
+                if isinstance(item, dict)
+            }
+        )
+    )
+
+    layer2_result = layer2_result or {}
+    http_evidence = http_evidence or {}
+    activity = activity or {}
+
+    return (
+        str(label).strip().lower(),
+        flow_info.get("src_ip"),
+        behaviors,
+        str(
+            correlation_data.get("severity", "informational")
+        ).lower(),
+        normalize_layer2_label(layer2_result.get("label") or ""),
+        http_evidence.get("method"),
+        http_evidence.get("path"),
+        _bucket(activity.get("unique_dst_ports", 0)),
+        _bucket(activity.get("unique_dst_ips", 0)),
+    )
+
+
+def _cache_get(signature):
+    entry = mitre_cache.get(signature)
+
+    if entry is None:
+        return None
+
+    stored_at, ttl, result = entry
+    age = time.monotonic() - stored_at
+
+    if age > ttl:
+        del mitre_cache[signature]
+        return None
+
+    return result, age
+
+
+def _cache_put(signature, result):
+    status = result.get("status")
+
+    if status not in CACHEABLE_STATUSES:
+        return  # error vb. cache'lenmez
+
+    ttl = (
+        MITRE_CACHE_TTL
+        if status == "completed"
+        else MITRE_INSUFFICIENT_TTL
+    )
+
+    if len(mitre_cache) >= MITRE_CACHE_MAX_ENTRIES:
+        oldest = min(
+            mitre_cache,
+            key=lambda key: mitre_cache[key][0],
+        )
+        del mitre_cache[oldest]
+
+    mitre_cache[signature] = (
+        time.monotonic(),
+        ttl,
+        copy.deepcopy(result),
+    )
+
+
+def _reuse(result, reason, age):
+    reused = copy.deepcopy(result)
+
+    reused["reused"] = {
+        "reason": reason,
+        "original_status": result.get("status"),
+        "age_seconds": round(age, 2),
+    }
+
+    reused["timing"] = {
+        "retrieval_seconds": 0.0,
+        "qwen_seconds": 0.0,
+        "total_seconds": 0.0,
+    }
+
+    reused.pop("raw_output", None)
+    reused.pop("ollama_metrics", None)
+
+    return reused
+
+
+def get_mitre_analysis(
+        decision,
+        layer1_label,
+        layer1_confidence,
+        behavioral_findings,
+        correlation_data,
+        flow_info,
+        layer2_result,
+        http_evidence,
+        activity,
+):
+    """
+    run_mitre_analysis'in önündeki kapı:
+    kanıt kapısı -> imza cache'i -> kaynak cooldown'u -> gerçek Qwen çağrısı.
+    """
+    if not MITRE_ENABLED:
+        return run_mitre_analysis(
+            layer1_label=layer1_label,
+            layer1_confidence=layer1_confidence,
+            behavioral_findings=behavioral_findings,
+            correlation_data=correlation_data,
+        )
+
+    # 1) Kanıt kapısı
+    allowed, reason = should_run_mitre(
+        layer1_confidence,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+    )
+
+    if not allowed:
+        return _skipped_result(
+            "skipped_low_evidence",
+            f"Qwen not called: {reason} "
+            f"(confidence={layer1_confidence:.4f}).",
+        )
+
+    # 2) İmza cache'i
+    signature = build_mitre_signature(
+        layer1_label,
+        flow_info,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+        http_evidence,
+        activity,
+    )
+
+    cached = _cache_get(signature)
+
+    if cached is not None:
+        result, age = cached
+        return _reuse(result, "same_evidence_signature", age)
+
+    # 3) Kaynak başına cooldown
+    src_ip = flow_info.get("src_ip")
+    last = mitre_last_run_by_source.get(src_ip)
+    now = time.monotonic()
+
+    if last is not None:
+        last_time, last_result = last
+        age = now - last_time
+
+        if age < MITRE_MIN_INTERVAL_PER_SOURCE:
+            if last_result.get("status") in CACHEABLE_STATUSES:
+                return _reuse(last_result, "source_cooldown", age)
+
+            return _skipped_result(
+                "skipped_cooldown",
+                f"Qwen not called: cooldown for {src_ip} "
+                f"({age:.1f}s < {MITRE_MIN_INTERVAL_PER_SOURCE}s).",
+            )
+
+    # 4) Gerçek çağrı
+    result = run_mitre_analysis(
+        layer1_label=layer1_label,
+        layer1_confidence=layer1_confidence,
+        behavioral_findings=behavioral_findings,
+        correlation_data=correlation_data,
+        flow_info=flow_info,
+        layer2_result=layer2_result,
+        http_evidence=http_evidence,
+        activity=activity,
+    )
+
+    mitre_last_run_by_source[src_ip] = (
+        time.monotonic(),
+        copy.deepcopy(result),
+    )
+
+    _cache_put(signature, result)
+
+    return result
+
+
+# ==========================================================
 # MITRE CONSOLE OUTPUT
 # ==========================================================
 
@@ -1313,6 +1762,12 @@ def print_mitre_analysis(mitre_analysis):
         f"candidates={len(candidates)}",
         f"techniques={len(techniques)}",
     )
+
+    if mitre_analysis.get("reused"):
+        print(
+            "MITRE REUSED ->",
+            mitre_analysis["reused"],
+        )
 
     if mitre_analysis.get("message"):
         print(
@@ -1432,6 +1887,8 @@ def process_prediction_row(
     }
 
     update_host_state(flow_info)
+
+    activity = update_source_activity(flow_info)
 
     behavioral_findings = detect_behaviors(
         src_ip
@@ -1556,13 +2013,16 @@ def process_prediction_row(
         )
         return
 
-    mitre_analysis = run_mitre_analysis(
+    mitre_analysis = get_mitre_analysis(
+        decision=decision,
         layer1_label=label,
         layer1_confidence=confidence,
-        behavioral_findings=(
-            behavioral_findings
-        ),
+        behavioral_findings=behavioral_findings,
         correlation_data=correlation_data,
+        flow_info=flow_info,
+        layer2_result=layer2_result,
+        http_evidence=http_evidence,
+        activity=activity,
     )
 
     metadata_file = pcap_file.with_suffix(
@@ -1585,6 +2045,7 @@ def process_prediction_row(
         "behavioral_findings": (
             behavioral_findings
         ),
+        "source_activity": activity,
         "mitre_analysis": (
             mitre_analysis
         ),
@@ -1659,6 +2120,8 @@ def process_batch():
     completed_flows = completed_flows[
         FLOW_BATCH_SIZE:
     ]
+
+    cleanup_source_activity()
 
     print(
         "\nProcessing "

@@ -1,7 +1,9 @@
 # mitre_parser.py
 
 import json
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def load_attack_patterns(path):
 
