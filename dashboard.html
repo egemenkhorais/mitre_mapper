@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MITRE Mapper - Live SOC</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; background:#0b0f19; color:#e2e8f0; }
+  .font-mono { font-family:'JetBrains Mono', monospace; }
+  .scrollbar-thin::-webkit-scrollbar { width:6px; height:6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background:#1e293b; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background:#334155; border-radius:3px; }
+  .tactic-col { min-width:170px; }
+  .tech-badge { transition:all .15s ease-in-out; }
+  .tech-badge:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(6,182,212,.25); }
+  tr.alert-row { cursor:pointer; }
+  @keyframes flash { from { background:rgba(6,182,212,.25);} to { background:transparent; } }
+  tr.fresh { animation: flash 2s ease-out; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+</style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-slate-950 text-slate-100">
+
+<header class="h-14 border-b border-slate-800 bg-slate-900/90 px-6 flex items-center justify-between z-30">
+  <div class="flex items-center space-x-3">
+    <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-mono font-bold text-white">M</div>
+    <div>
+      <span class="font-bold text-white">MITRE Mapper <span class="text-xs font-mono font-normal px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">live</span></span>
+      <span class="text-xs text-slate-400 block -mt-1 font-mono">github.com/egemenkhorais/mitre_mapper</span>
+    </div>
+  </div>
+  <div class="flex items-center space-x-4">
+    <div class="flex items-center space-x-2 text-xs font-mono bg-slate-950/80 px-3 py-1.5 rounded-md border border-slate-800">
+      <span id="conn-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+      <span id="conn-text" class="text-slate-300">bağlanıyor…</span>
+    </div>
+    <div class="flex space-x-2">
+      <button onclick="exportNavigatorJson()" class="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">ATT&amp;CK Navigator JSON</button>
+      <button onclick="exportCSV()" class="px-3 py-1.5 text-xs font-medium rounded-md bg-cyan-600 hover:bg-cyan-500 text-white">CSV Raporu Al</button>
+    </div>
+  </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden">
+  <aside class="w-60 border-r border-slate-800 bg-slate-900/50 flex flex-col justify-between p-3">
+    <div class="space-y-1">
+      <div class="text-[11px] font-mono text-slate-400 uppercase tracking-wider px-3 mb-2 font-semibold">Görünümler</div>
+      <button onclick="switchView('dashboard')" id="nav-dashboard" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 text-cyan-400 border border-slate-700/60">Genel Durum (SOC)</button>
+      <button onclick="switchView('matrix')" id="nav-matrix" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">ATT&amp;CK Matrisi</button>
+      <button onclick="switchView('inspector')" id="nav-inspector" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">Olay İnceleme</button>
+      <button onclick="switchView('rules')" id="nav-rules" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">Gözlenen Eşlemeler</button>
+
+      <div class="pt-4 text-[11px] font-mono text-slate-400 uppercase tracking-wider px-3 mb-2 font-semibold">Kaynak</div>
+      <div class="px-3 py-2 bg-slate-950/60 rounded-md border border-slate-800 text-xs space-y-1 font-mono">
+        <div class="text-slate-400">alerts/ klasörü</div>
+        <div id="side-dir" class="text-cyan-400 break-all text-[10px]">-</div>
+        <div class="text-slate-400 pt-1">ATT&amp;CK verisi</div>
+        <div id="side-catalog" class="text-purple-400 break-all text-[10px]">-</div>
+      </div>
+    </div>
+    <div class="p-3 bg-slate-950/80 rounded-lg border border-slate-800/80">
+      <div class="text-[11px] font-mono text-slate-400 mb-1">Geliştirici &amp; Proje</div>
+      <div class="text-xs font-semibold text-slate-200">Egemen Koray Keleş</div>
+      <div class="text-[11px] text-cyan-400 font-mono truncate">@egemenkhorais</div>
+    </div>
+  </aside>
+
+  <main class="flex-1 overflow-y-auto p-6 scrollbar-thin bg-slate-950">
+
+    <!-- DASHBOARD -->
+    <div id="view-dashboard" class="space-y-6">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+          <div class="text-xs font-mono text-slate-400 uppercase">İşlenen Alert</div>
+          <div class="text-2xl font-bold font-mono text-white mt-1" id="stat-total-events">-</div>
+          <div class="text-[11px] text-emerald-400 mt-2 font-mono" id="stat-recent">-</div>
+        </div>
+        <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+          <div class="text-xs font-mono text-slate-400 uppercase">Doğrulanmış Saldırı</div>
+          <div class="text-2xl font-bold font-mono text-rose-400 mt-1" id="stat-confirmed">-</div>
+          <div class="text-[11px] text-slate-400 mt-2 font-mono truncate" id="stat-verdicts">-</div>
+        </div>
+        <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+          <div class="text-xs font-mono text-slate-400 uppercase">Eşleşen MITRE Tekniği</div>
+          <div class="text-2xl font-bold font-mono text-cyan-400 mt-1" id="stat-mapped-techniques">-</div>
+          <div class="text-[11px] text-slate-400 mt-2 font-mono" id="stat-mapped-tactics">-</div>
+        </div>
+        <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
+          <div class="text-xs font-mono text-slate-400 uppercase">Layer-1 Güven (Ort.)</div>
+          <div class="text-2xl font-bold font-mono text-purple-400 mt-1" id="stat-avg-confidence">-</div>
+          <div class="text-[11px] text-purple-300 mt-2 font-mono truncate" id="stat-mitre-status">-</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="p-5 rounded-xl bg-slate-900 border border-slate-800">
+          <h3 class="text-sm font-semibold text-slate-200 mb-4 flex justify-between"><span>Taktik Dağılımı</span><span class="text-xs font-mono text-slate-400">Top 5</span></h3>
+          <div id="tactic-dist" class="space-y-3 font-mono text-xs"></div>
+          <div class="mt-6 pt-4 border-t border-slate-800 text-[11px] text-slate-400" id="decision-breakdown"></div>
+          <div class="mt-2 text-[11px] text-slate-400" id="critical-breakdown"></div>
+        </div>
+
+        <div class="lg:col-span-2 p-5 rounded-xl bg-slate-900 border border-slate-800">
+          <h3 class="text-sm font-semibold text-slate-200 mb-4">Son Alert'ler · AI Kararı · MITRE</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs font-mono">
+              <thead><tr class="text-slate-400 border-b border-slate-800">
+                <th class="pb-2">Zaman</th><th class="pb-2">Etiket</th><th class="pb-2">Akış</th><th class="pb-2">AI Kararı</th><th class="pb-2">MITRE</th><th class="pb-2">Güven</th><th class="pb-2">Risk</th>
+              </tr></thead>
+              <tbody id="recent-alerts-tbody" class="divide-y divide-slate-800/60"></tbody>
+            </table>
+          </div>
+          <div id="empty-hint" class="hidden text-xs font-mono text-slate-500 py-8 text-center">Henüz alert yok. live_soc.py çalışıp alerts/ klasörüne yazdıkça burada görünecek.</div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 text-xs text-slate-400 font-mono">Son 8 alert gösteriliyor · satıra tıklayarak detay aç</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MATRIX -->
+    <div id="view-matrix" class="hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-white">MITRE ATT&amp;CK Matrisi</h2>
+          <p class="text-xs text-slate-400 font-mono">Yalnızca doğrulanmış saldırılarda seçilmiş, ağdan gözlemlenebilir teknikler. Renk = en yüksek korelasyon severity'si.</p>
+        </div>
+        <div class="flex items-center space-x-3 text-xs font-mono">
+          <span class="text-cyan-300">■ Düşük/Orta</span><span class="text-amber-300">■ Yüksek</span><span class="text-rose-300">■ Kritik</span>
+        </div>
+      </div>
+      <div class="overflow-x-auto pb-4 scrollbar-thin"><div class="flex gap-3 min-w-max" id="matrix-container"></div></div>
+    </div>
+
+    <!-- INSPECTOR -->
+    <div id="view-inspector" class="hidden space-y-4">
+      <div>
+        <h2 class="text-lg font-bold text-white">Olay İnceleme</h2>
+        <p class="text-xs text-slate-400 font-mono">Önce "AI'a Sor" ile gerçekten saldırı mı diye doğrulat; saldırı ise "MITRE Eşle" ile aksiyon için teknik eşlet.</p>
+      </div>
+      <label class="flex items-center gap-2 text-xs font-mono text-slate-300"><input type="checkbox" id="follow-live" checked> Canlı takip</label>
+      <div id="inspector-body" class="text-xs font-mono text-slate-500">Bir alert seçin.</div>
+    </div>
+
+    <!-- RULES -->
+    <div id="view-rules" class="hidden space-y-4">
+      <div>
+        <h2 class="text-lg font-bold text-white">Gözlenen Eşlemeler</h2>
+        <p class="text-xs text-slate-400 font-mono">Model etiketi → MITRE tekniği; gerçek alert'lerden türetilir.</p>
+      </div>
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <table class="w-full text-left text-xs font-mono">
+          <thead><tr class="bg-slate-950 text-slate-400 border-b border-slate-800">
+            <th class="p-3">Model Etiketi</th><th class="p-3">Taktik</th><th class="p-3">Teknik ID</th><th class="p-3">Teknik Adı</th><th class="p-3">Adet</th><th class="p-3">Ort. Güven</th><th class="p-3">Max Severity</th>
+          </tr></thead>
+          <tbody id="rules-table-tbody" class="divide-y divide-slate-800/60"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Technique modal -->
+<div id="technique-modal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center p-4">
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+    <div class="flex items-start justify-between border-b border-slate-800 pb-3">
+      <div>
+        <span id="modal-tech-id" class="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800"></span>
+        <h3 id="modal-tech-name" class="text-base font-bold text-white mt-1"></h3>
+      </div>
+      <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-mono">&times;</button>
+    </div>
+    <div class="space-y-3 text-xs font-mono">
+      <div><span class="text-slate-400 block text-[11px] uppercase">Taktik</span><span id="modal-tactic" class="text-slate-200 font-semibold"></span></div>
+      <div><span class="text-slate-400 block text-[11px] uppercase">Açıklama (MITRE)</span><p id="modal-desc" class="text-slate-300 leading-relaxed mt-1 text-[11px] whitespace-pre-line"></p></div>
+      <div><span class="text-slate-400 block text-[11px] uppercase">Bu tekniği tetikleyen etiketler</span><div id="modal-attacks" class="flex flex-wrap gap-1.5 mt-1"></div></div>
+    </div>
+    <div class="flex justify-end"><button onclick="closeModal()" class="px-4 py-1.5 text-xs font-mono bg-slate-800 hover:bg-slate-700 rounded-md">Kapat</button></div>
+  </div>
+</div>
+
+<script>
+const state = { alerts: [], selectedId: null, busy: {} };
+const SEV_TR = { critical:'Kritik', high:'Yüksek', medium:'Orta', low:'Düşük', informational:'Bilgi' };
+const SEV_CLASS = {
+  critical:'text-rose-400 bg-rose-950/60 border-rose-800',
+  high:'text-amber-400 bg-amber-950/60 border-amber-800',
+  medium:'text-cyan-400 bg-cyan-950/60 border-cyan-800',
+  low:'text-slate-300 bg-slate-800 border-slate-700',
+  informational:'text-slate-400 bg-slate-900 border-slate-700'
+};
+const VERDICT_CLASS = {
+  'Malicious':'text-rose-300 bg-rose-950/70 border-rose-700',
+  'Suspicious':'text-amber-300 bg-amber-950/70 border-amber-700',
+  'Likely Benign':'text-emerald-300 bg-emerald-950/50 border-emerald-800',
+  'Benign':'text-emerald-400 bg-emerald-950/70 border-emerald-700'
+};
+const VERDICT_TR = { 'Malicious':'Saldırı', 'Suspicious':'Şüpheli', 'Likely Benign':'Muhtemelen Normal', 'Benign':'Normal' };
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const pct = v => (v == null ? '-' : (v * 100).toFixed(1) + '%');
+const sevBadge = s => `<span class="px-2 py-0.5 rounded text-[10px] font-bold border ${SEV_CLASS[s] || SEV_CLASS.informational}">${esc(SEV_TR[s] || s)}</span>`;
+const flowText = a => `${esc(a.src_ip)}:${esc(a.src_port)} → ${esc(a.dst_ip)}:${esc(a.dst_port)}`;
+
+function verdictBadge(verdict, status) {
+  if (!verdict) {
+    const txt = status === 'pending_user' ? 'Sorulmadı' : (status || 'not_run');
+    return `<span class="px-2 py-0.5 rounded text-[10px] border text-slate-400 bg-slate-900 border-slate-700">${esc(txt)}</span>`;
+  }
+  return `<span class="px-2 py-0.5 rounded text-[10px] font-bold border ${VERDICT_CLASS[verdict] || ''}">${esc(VERDICT_TR[verdict] || verdict)}</span>`;
+}
+const isAttack = v => v && v.status === 'completed' &&
+  (v.verdict === 'Malicious' || (v.verdict === 'Suspicious' && (v.confidence || 0) >= 0.8));
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { cache: 'no-store', ...opts });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(data.message || data.error || (path + ' ' + r.status)); e.status = r.status; throw e; }
+  return data;
+}
+
+function setConn(ok, text) {
+  document.getElementById('conn-dot').className = 'w-2 h-2 rounded-full ' + (ok ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500');
+  document.getElementById('conn-text').textContent = text;
+}
+
+// ------------------------------------------------------------------
+function renderStats(s) {
+  const set = (id, v) => document.getElementById(id).textContent = v;
+  set('stat-total-events', s.total_alerts.toLocaleString('tr-TR'));
+  set('stat-recent', `+${s.last_15min} son 15 dk`);
+  const bv = s.by_verdict || {};
+  set('stat-confirmed', (bv['Malicious'] || 0) + (bv['Suspicious'] || 0));
+  set('stat-verdicts', Object.keys(bv).length ? Object.entries(bv).map(([k, v]) => `${VERDICT_TR[k] || k}:${v}`).join(' · ') : '-');
+  set('stat-mapped-techniques', `${s.mapped_techniques} Teknik`);
+  set('stat-mapped-tactics', `${s.mapped_tactics} Taktik · ${s.mapped_alerts} alert eşlendi`);
+  set('stat-avg-confidence', s.avg_confidence == null ? '-' : pct(s.avg_confidence));
+  const st = s.by_mitre_status || {};
+  set('stat-mitre-status', Object.keys(st).length ? 'MITRE ' + Object.entries(st).map(([k, v]) => `${k}:${v}`).join(' · ') : 'MITRE: -');
+  set('side-dir', s.alerts_dir);
+  set('side-catalog', s.catalog_source);
+
+  const dist = document.getElementById('tactic-dist');
+  dist.innerHTML = s.tactic_distribution.length ? s.tactic_distribution.map(t => `
+    <div>
+      <div class="flex justify-between mb-1 text-slate-300"><span>${esc(t.tactic)}</span><span class="text-cyan-400 font-bold">${t.percent}%</span></div>
+      <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden"><div class="bg-cyan-500 h-full rounded-full" style="width:${Math.min(100, t.percent)}%"></div></div>
+    </div>`).join('') : '<div class="text-slate-500">MITRE eşlemesi yalnızca doğrulanmış saldırılarda yapılır.</div>';
+
+  document.getElementById('decision-breakdown').innerHTML =
+    '<span class="text-cyan-400 font-semibold font-mono">Karar dağılımı:</span> ' +
+    (Object.entries(s.by_decision || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(' · ') || '-');
+  document.getElementById('critical-breakdown').innerHTML =
+    `<span class="text-rose-400 font-semibold font-mono">Kritik/Yüksek risk:</span> ${esc(s.critical_high)} ${s.critical_high_labels.length ? '(' + esc(s.critical_high_labels.join(', ')) + ')' : ''}`;
+}
+
+function renderRecent(freshId) {
+  const tbody = document.getElementById('recent-alerts-tbody');
+  const rows = state.alerts.slice(0, 8);
+  document.getElementById('empty-hint').classList.toggle('hidden', rows.length > 0);
+  tbody.innerHTML = rows.map(a => {
+    const p = a.primary;
+    const mitre = p
+      ? `<span class="text-cyan-400 font-semibold">${esc(p.id)}</span><span class="text-slate-400 text-[11px] block truncate max-w-[160px]">${esc(p.name)}</span>`
+      : `<span class="text-slate-500">${esc(a.mitre_status)}</span><span class="text-slate-600 text-[10px] block">${esc(a.mitre_reason || '')}</span>`;
+    return `<tr class="alert-row hover:bg-slate-800/40 ${a.id === freshId ? 'fresh' : ''}" onclick="openAlert('${esc(a.id)}')">
+      <td class="py-2.5 text-slate-400">${esc(a.time)}</td>
+      <td class="py-2.5 font-bold text-slate-200">${esc(a.label)}<span class="block text-[10px] text-slate-500">${esc(a.decision)}</span></td>
+      <td class="py-2.5 text-slate-400 text-[11px]">${flowText(a)}</td>
+      <td class="py-2.5">${verdictBadge(a.verdict, a.validation_status)}${a.verdict ? `<span class="text-slate-500 text-[10px] block">${pct(a.verdict_confidence)}</span>` : ''}</td>
+      <td class="py-2.5">${mitre}</td>
+      <td class="py-2.5 text-purple-400">${pct(a.confidence)}</td>
+      <td class="py-2.5">${sevBadge(a.severity)}<span class="text-slate-500 text-[10px] block">risk ${esc(a.risk_score)}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderMatrix(m) {
+  const levelClass = {
+    crit: 'bg-rose-950/80 border-rose-700 text-rose-200',
+    high: 'bg-amber-950/80 border-amber-700 text-amber-200',
+    med:  'bg-cyan-950/80 border-cyan-700 text-cyan-200'
+  };
+  document.getElementById('matrix-container').innerHTML = m.tactics.map(t => `
+    <div class="tactic-col flex-1 bg-slate-900/70 border border-slate-800 rounded-xl p-3 space-y-2">
+      <div class="border-b border-slate-800 pb-2">
+        <span class="text-[11px] font-mono font-bold text-slate-300 uppercase block">${esc(t.name)}</span>
+        <span class="text-[10px] text-slate-500 font-mono">${t.techniques.length} teknik</span>
+      </div>
+      ${t.techniques.length ? t.techniques.map(x => `
+        <div onclick="showTechModal('${esc(x.id)}')" class="tech-badge p-2.5 rounded-lg border cursor-pointer ${levelClass[x.level]}">
+          <div class="flex justify-between text-[10px] font-mono"><span class="font-bold">${esc(x.id)}</span><span class="px-1 rounded bg-black/40 font-bold">${x.count}×</span></div>
+          <div class="font-semibold text-[11px] leading-tight">${esc(x.name)}</div>
+        </div>`).join('') : '<div class="text-[10px] font-mono text-slate-600">eşleşme yok</div>'}
+    </div>`).join('');
+}
+
+function renderRules(list) {
+  document.getElementById('rules-table-tbody').innerHTML = list.length ? list.map(r => `
+    <tr class="hover:bg-slate-800/40">
+      <td class="p-3 font-bold text-slate-200">${esc(r.attack)}</td>
+      <td class="p-3 text-cyan-400">${esc(r.tactic)}</td>
+      <td class="p-3 font-semibold text-amber-400 cursor-pointer hover:underline" onclick="showTechModal('${esc(r.tech_id)}')">${esc(r.tech_id)}</td>
+      <td class="p-3 text-slate-300">${esc(r.tech_name)}</td>
+      <td class="p-3 text-slate-300">${r.count}</td>
+      <td class="p-3 text-purple-400">${pct(r.avg_confidence)}</td>
+      <td class="p-3">${sevBadge(r.max_severity)}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="p-6 text-center text-slate-500">Henüz eşleme gözlenmedi.</td></tr>';
+}
+
+// ------------------------------------------------------------------
+// INSPECTOR
+// ------------------------------------------------------------------
+function validationCard(v, id) {
+  const busy = state.busy[id];
+  const btnLabel = busy === 'validate' ? 'Qwen düşünüyor…' : (v && v.status === 'completed' ? 'Tekrar Sor' : "AI'a Sor: Gerçekten saldırı mı?");
+  const btn = `<button onclick="askAI('${esc(id)}')" ${busy ? 'disabled' : ''} class="px-3 py-1.5 text-xs font-semibold rounded-md bg-purple-600 hover:bg-purple-500 text-white">${btnLabel}</button>`;
+
+  if (!v || v.status !== 'completed') {
+    const msg = v ? `status: ${esc(v.status)}${v.reason ? ' / ' + esc(v.reason) : ''}${v.message ? ' · ' + esc(v.message) : ''}${v.error ? ' · ' + esc(v.error) : ''}` : 'Henüz doğrulanmadı.';
+    return `<div class="p-4 rounded-lg border border-slate-800 bg-slate-950 space-y-3">
+      <div class="flex items-center justify-between"><span class="text-[11px] text-slate-400 uppercase">Threat Validator</span>${btn}</div>
+      <div class="text-slate-400">${msg}</div></div>`;
+  }
+
+  const ind = (v.malicious_indicators || []).map(i => `<li>${esc(i)}</li>`).join('');
+  return `<div class="p-4 rounded-lg border border-slate-800 bg-slate-950 space-y-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2"><span class="text-[11px] text-slate-400 uppercase">Threat Validator</span>${verdictBadge(v.verdict)}<span class="text-purple-400">${pct(v.confidence)}</span>
+        <span class="text-slate-500 text-[10px]">${esc(v.model || '')} · ${esc(((v.timing || {}).seconds || 0).toFixed(2))}s${v.reused ? ' · yeniden kullanıldı: ' + esc(v.reused.reason) : ''}</span></div>
+      ${btn}
+    </div>
+    ${v.reasoning ? `<div class="text-slate-200">${esc(v.reasoning)}</div>` : ''}
+    ${v.benign_explanation ? `<div class="text-emerald-300"><span class="text-slate-400">Olası normal açıklama:</span> ${esc(v.benign_explanation)}</div>` : ''}
+    ${ind ? `<div class="text-rose-300"><span class="text-slate-400">Saldırı göstergeleri:</span><ul class="list-disc ml-5">${ind}</ul></div>` : ''}
+    ${v.recommended_next_step ? `<div class="text-cyan-300"><span class="text-slate-400">Sonraki adım:</span> ${esc(v.recommended_next_step)}</div>` : ''}
+  </div>`;
+}
+
+function mitreCard(mitre, v, id) {
+  const busy = state.busy[id];
+  const attack = isAttack(v);
+  const btn = `<button onclick="runMitre('${esc(id)}', ${attack ? 'false' : 'true'})" ${busy ? 'disabled' : ''}
+     class="px-3 py-1.5 text-xs font-semibold rounded-md ${attack ? 'bg-cyan-600 hover:bg-cyan-500 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'}">
+     ${busy === 'mitre' ? 'MITRE eşleniyor…' : (attack ? 'MITRE Eşle' : 'MITRE Eşle (zorla)')}</button>`;
+
+  const techniques = ((mitre.result || {}).techniques) || [];
+  const techs = techniques.length ? techniques.map(t => `
+    <div class="p-3 bg-slate-900 rounded-lg border border-slate-800">
+      <div class="flex justify-between"><span class="text-cyan-400 font-bold cursor-pointer hover:underline" onclick="showTechModal('${esc(t.id)}')">${esc(t.id)}</span><span class="text-purple-400">${pct(t.confidence)}</span></div>
+      <div class="text-slate-200 text-[11px]">${esc(t.name)} <span class="text-slate-500">[${esc(t.visibility || '?')}${t.requires_payload_evidence ? ', payload kanıtı gerekir' : ''}]</span></div>
+      <div class="text-slate-400 text-[11px] mt-1">${esc(t.reason)}</div>
+    </div>`).join('') : `<div class="text-slate-500">Teknik yok (status: ${esc(mitre.status || 'not_run')}${mitre.reason ? ' / ' + esc(mitre.reason) : ''}). ${esc(mitre.message || '')}</div>`;
+
+  const nf = mitre.network_observable_filter;
+  const filterInfo = nf ? `<div class="text-[10px] text-slate-500">Network-observable filtre (${esc(nf.source)}, ${esc(nf.set_size)} teknik)${nf.removed && nf.removed.length ? ' · elenen host-only: ' + esc(nf.removed.join(', ')) : ''}</div>` : '';
+  const timing = mitre.timing && mitre.status !== 'skipped' && mitre.status !== 'deferred' ? ' · ' + esc((mitre.timing.total_seconds || 0).toFixed(2)) + 's' : '';
+
+  return `<div class="p-4 rounded-lg border border-slate-800 bg-slate-950 space-y-3">
+    <div class="flex items-center justify-between">
+      <span class="text-[11px] text-slate-400 uppercase">MITRE (status: ${esc(mitre.status || 'not_run')} · ${(mitre.candidates || []).length} aday${timing})</span>
+      ${btn}
+    </div>
+    <div class="space-y-2">${techs}</div>
+    ${filterInfo}
+  </div>`;
+}
+
+function renderInspectorContent(a, raw) {
+  const body = document.getElementById('inspector-body');
+  const v = raw.threat_validation || null;
+  const mitre = raw.mitre_analysis || {};
+  const kv = (k, val) => `<div class="p-3 bg-slate-950 rounded-lg border border-slate-800"><div class="text-[10px] text-slate-400 uppercase">${esc(k)}</div><div class="text-sm font-bold text-slate-200 mt-0.5 break-words">${val}</div></div>`;
+  const l2 = raw.layer2 || a.layer2;
+  const act = raw.source_activity || a.source_activity || {};
+  const behaviors = (raw.behavioral_findings || []).map(b => b.behavior).filter(Boolean);
+  const top = (raw.top_predictions || []).map(t => `${esc(t.label)} ${pct(t.probability)}`).join(' · ');
+  const http = raw.http_evidence;
+
+  body.innerHTML = `
+    <div class="p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-4 text-xs">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-bold text-white">${esc(a.label)} <span class="text-slate-500 font-normal">· ${esc(a.date)} ${esc(a.time)}</span></h3>
+        <div class="flex gap-2">${verdictBadge(v && v.verdict, v && v.status)}${sevBadge(a.severity)}</div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        ${kv('Karar', esc(a.decision) + (a.layer1_decision !== a.decision ? ` <span class="text-slate-500 text-[10px]">(L1: ${esc(a.layer1_decision)})</span>` : ''))}
+        ${kv('Layer-1 Güven', pct(a.confidence))}
+        ${kv('Akış', flowText(a))}
+        ${kv('Risk Skoru', esc(a.risk_score))}
+        ${kv('Paket', esc(raw.packet_count ?? a.packet_count))}
+        ${kv('Layer-2', l2 ? `${esc(l2.label)} (${esc(l2.status)}, ${pct(l2.confidence)})` : '-')}
+        ${kv('Davranışlar', esc(behaviors.join(', ') || '-'))}
+        ${kv('Kaynak Aktivite (60s)', `${esc(act.flow_count ?? 0)} flow · ${esc(act.unique_dst_ports ?? 0)} port · ${esc(act.unique_dst_ips ?? 0)} host`)}
+      </div>
+      ${top ? `<div class="text-slate-400">Top tahminler: <span class="text-slate-200">${top}</span></div>` : ''}
+      ${raw.retained_reason ? `<div class="text-amber-300">Korunma nedeni: ${esc(raw.retained_reason)}</div>` : ''}
+      ${http ? `<div class="p-3 bg-slate-950 rounded-lg border border-slate-800 text-slate-300">HTTP: ${esc(http.method)} ${esc(http.path)} (query:${http.has_query ? 'var' : 'yok'}, body:${http.has_body ? 'var' : 'yok'})</div>` : ''}
+      ${validationCard(v, a.id)}
+      ${mitreCard(mitre, v, a.id)}
+      <div class="text-[10px] text-slate-500 break-all">PCAP: ${esc(raw.pcap_file || '-')}</div>
+    </div>`;
+}
+
+const inspectorCache = {};
+
+async function renderInspector(id) {
+  const body = document.getElementById('inspector-body');
+  if (!inspectorCache[id]) body.textContent = 'Yükleniyor…';
+  try {
+    const data = await api('/api/alerts/' + encodeURIComponent(id));
+    inspectorCache[id] = data;
+    if (state.selectedId === id) renderInspectorContent(data.alert, data.raw);
+  } catch (e) {
+    body.textContent = 'Detay alınamadı: ' + e.message;
+  }
+}
+
+function applyActionResult(id, data) {
+  inspectorCache[id] = data;
+  if (data.alert) {
+    const i = state.alerts.findIndex(x => x.id === id);
+    if (i >= 0) state.alerts[i] = data.alert;
+    renderRecent();
+  }
+  if (state.selectedId === id) renderInspectorContent(data.alert || inspectorCache[id].alert, data.raw);
+  scheduleRefresh();
+}
+
+async function runAction(id, kind, url) {
+  if (state.busy[id]) return;
+  state.busy[id] = kind;
+  const cached = inspectorCache[id];
+  if (cached && state.selectedId === id) renderInspectorContent(cached.alert, cached.raw);
+  try {
+    const data = await api(url, { method: 'POST' });
+    delete state.busy[id];
+    applyActionResult(id, data);
+  } catch (e) {
+    delete state.busy[id];
+    if (cached && state.selectedId === id) renderInspectorContent(cached.alert, cached.raw);
+    if (e.status === 409 && kind === 'mitre') {
+      if (confirm(e.message + '\n\nYine de MITRE eşlensin mi?')) return runMitre(id, true);
+    } else {
+      alert('İşlem başarısız: ' + e.message);
+    }
+  }
+}
+
+function askAI(id) { return runAction(id, 'validate', `/api/alerts/${encodeURIComponent(id)}/validate`); }
+function runMitre(id, force) { return runAction(id, 'mitre', `/api/alerts/${encodeURIComponent(id)}/mitre${force ? '?force=1' : ''}`); }
+
+// ------------------------------------------------------------------
+function switchView(viewId) {
+  ['dashboard', 'matrix', 'inspector', 'rules'].forEach(id => {
+    const active = id === viewId;
+    document.getElementById('view-' + id).classList.toggle('hidden', !active);
+    const btn = document.getElementById('nav-' + id);
+    ['bg-slate-800', 'text-cyan-400', 'border', 'border-slate-700/60'].forEach(c => btn.classList.toggle(c, active));
+    btn.classList.toggle('text-slate-300', !active);
+  });
+  if (viewId === 'matrix') loadMatrix();
+  if (viewId === 'rules') loadRules();
+}
+
+function openAlert(id) {
+  state.selectedId = id;
+  switchView('inspector');
+  renderInspector(id);
+}
+
+async function showTechModal(id) {
+  const m = document.getElementById('technique-modal');
+  try {
+    const info = await api('/api/technique/' + encodeURIComponent(id));
+    document.getElementById('modal-tech-id').textContent = info.id;
+    document.getElementById('modal-tech-name').textContent = info.name || '(ad bulunamadı)';
+    document.getElementById('modal-tactic').textContent = info.tactics.join(', ') || '-';
+    document.getElementById('modal-desc').textContent = info.description || 'Açıklama için cache/attack_enterprise.json gerekli.';
+    const box = document.getElementById('modal-attacks');
+    box.innerHTML = info.attacks.length ? info.attacks.map(a => `<span class="px-2 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">${esc(a)}</span>`).join('') : '<span class="text-slate-500">-</span>';
+    m.classList.remove('hidden'); m.classList.add('flex');
+  } catch (e) { console.error(e); }
+}
+function closeModal() { const m = document.getElementById('technique-modal'); m.classList.add('hidden'); m.classList.remove('flex'); }
+
+// ------------------------------------------------------------------
+async function loadStats()  { try { renderStats(await api('/api/stats')); } catch (e) {} }
+async function loadMatrix() { try { renderMatrix(await api('/api/matrix')); } catch (e) {} }
+async function loadRules()  { try { renderRules((await api('/api/mappings')).mappings); } catch (e) {} }
+
+let refreshTimer = null;
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    loadStats();
+    if (!document.getElementById('view-matrix').classList.contains('hidden')) loadMatrix();
+    if (!document.getElementById('view-rules').classList.contains('hidden')) loadRules();
+  }, 400);
+}
+
+function connectStream() {
+  const es = new EventSource('/api/stream');
+  es.onopen = () => setConn(true, 'canlı akış bağlı');
+  es.onerror = () => setConn(false, 'bağlantı koptu, yeniden deneniyor…');
+  es.addEventListener('alert', ev => {
+    const a = JSON.parse(ev.data);
+    const i = state.alerts.findIndex(x => x.id === a.id);
+    if (i >= 0) state.alerts[i] = a; else state.alerts.unshift(a);
+    state.alerts.sort((x, y) => y.ts - x.ts);
+    state.alerts = state.alerts.slice(0, 500);
+    renderRecent(a.id);
+    scheduleRefresh();
+    const inspecting = !document.getElementById('view-inspector').classList.contains('hidden');
+    const busyNow = state.selectedId && state.busy[state.selectedId];
+    if (document.getElementById('follow-live').checked && inspecting && !busyNow) {
+      state.selectedId = a.id; renderInspector(a.id);
+    }
+  });
+}
+
+async function exportNavigatorJson() {
+  const layer = await api('/api/navigator');
+  download('mitre_attack_navigator_layer.json', JSON.stringify(layer, null, 2), 'application/json');
+}
+
+function exportCSV() {
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const safe = v => /^[=+\-@]/.test(String(v ?? '')) ? "'" + v : v;
+  let csv = 'Date,Time,Decision,Label,Src,Dst,AI_Verdict,AI_Confidence,Tactic,Technique_ID,Technique_Name,Layer1_Confidence,Severity,Risk,MITRE_Status\n';
+  state.alerts.forEach(a => {
+    const p = a.primary || {};
+    csv += [a.date, a.time, a.decision, a.label, `${a.src_ip}:${a.src_port}`, `${a.dst_ip}:${a.dst_port}`,
+            a.verdict, a.verdict_confidence, p.tactic, p.id, p.name, a.confidence, a.severity, a.risk_score, a.mitre_status].map(v => q(safe(v))).join(',') + '\n';
+  });
+  download('mitre_mapper_alerts.csv', csv, 'text/csv');
+}
+
+function download(name, content, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const data = await api('/api/alerts?limit=500');
+    state.alerts = data.alerts;
+    renderRecent();
+    await loadStats();
+    setConn(true, 'bağlı');
+  } catch (e) {
+    setConn(false, 'API erişilemiyor (soc_api.py çalışıyor mu?)');
+  }
+  connectStream();
+});
+</script>
+</body>
+</html>

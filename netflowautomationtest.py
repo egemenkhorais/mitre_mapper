@@ -4,9 +4,9 @@ import re
 import warnings
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
 
 from scapy.all import rdpcap, IP, TCP, UDP, ICMP, Raw
 from scapy.layers.dns import DNS
@@ -14,19 +14,25 @@ from scapy.layers.dns import DNS
 warnings.filterwarnings("ignore")
 
 FTP_REPLY_PATTERN = re.compile(rb"^(\d{3})[\s-]")
+BASE_DIR = Path(__file__).resolve().parent
+FEATURE_NAMES_PATH = BASE_DIR / "artifacts" / "feature_names.joblib"
 
-# artifacts/ klasörü bu dosyayla aynı yerde (proje kökü) varsayılır.
-# Çalışma klasöründen bağımsız olması için mutlak yol kullanılır.
-FEATURE_NAMES_PATH = (
-    Path(__file__).resolve().parent / "artifacts" / "feature_names.joblib"
-)
+# IMPORTANT:
+# NF-UQ-NIDS/NFStream L7_PROTO is not a custom DNS=1, FTP=2, HTTPS=3 field.
+# Arbitrary values create severe live/training feature drift. Until the exact
+# training-time application-protocol encoder is available, keep it unknown (0).
+USE_CUSTOM_L7_MAPPING = False
+
+# Very short one-packet flows otherwise produce artificial multi-MB/s rates.
+# This does not invent duration. A zero-duration direction gets rate 0.
+ZERO_DURATION_RATE = 0.0
 
 
 def get_transport_info(pkt):
     if TCP in pkt:
-        return (int(pkt[TCP].sport), int(pkt[TCP].dport), 6)
+        return int(pkt[TCP].sport), int(pkt[TCP].dport), 6
     if UDP in pkt:
-        return (int(pkt[UDP].sport), int(pkt[UDP].dport), 17)
+        return int(pkt[UDP].sport), int(pkt[UDP].dport), 17
     if ICMP in pkt:
         return 0, 0, 1
     if IP in pkt:
@@ -35,11 +41,11 @@ def get_transport_info(pkt):
 
 
 def make_forward_key(src, dst, sport, dport, proto):
-    return (src, dst, int(sport), int(dport), int(proto))
+    return src, dst, int(sport), int(dport), int(proto)
 
 
 def make_reverse_key(src, dst, sport, dport, proto):
-    return (dst, src, int(dport), int(sport), int(proto))
+    return dst, src, int(dport), int(sport), int(proto)
 
 
 def directional_duration_ms(first_ts, last_ts):
@@ -52,8 +58,9 @@ def calculate_second_bytes(byte_count, first_ts, last_ts):
     if byte_count <= 0:
         return 0.0
     duration_ms = directional_duration_ms(first_ts, last_ts)
-    effective_seconds = max(duration_ms / 1000.0, 0.001)
-    return float(byte_count) / effective_seconds
+    if duration_ms <= 0.0:
+        return ZERO_DURATION_RATE
+    return float(byte_count) / (duration_ms / 1000.0)
 
 
 def update_packet_size_bin(flow, packet_size):
@@ -74,15 +81,16 @@ def tcp_sequence_range(pkt):
         return None
     tcp = pkt[TCP]
     payload_length = len(bytes(tcp.payload))
-    consumed_sequence = payload_length
+    consumed = payload_length
     flags = int(tcp.flags)
-    if flags & 0x02: consumed_sequence += 1  # SYN
-    if flags & 0x01: consumed_sequence += 1  # FIN
-    if consumed_sequence <= 0:
+    if flags & 0x02:
+        consumed += 1
+    if flags & 0x01:
+        consumed += 1
+    if consumed <= 0:
         return None
     start = int(tcp.seq)
-    end = start + consumed_sequence
-    return start, end, payload_length
+    return start, start + consumed, payload_length
 
 
 def ranges_overlap(start_a, end_a, start_b, end_b):
@@ -95,7 +103,8 @@ def first_dns_answer_ttl(dns):
     ttls = []
     current = dns.an
     for _ in range(int(dns.ancount or 0)):
-        if current is None: break
+        if current is None:
+            break
         try:
             if hasattr(current, "ttl"):
                 ttls.append(int(current.ttl))
@@ -109,9 +118,14 @@ def first_dns_answer_ttl(dns):
 
 
 def detect_l7_protocol(pkt, source_port, destination_port):
-    if DNS in pkt: return 1
-    if source_port == 21 or destination_port == 21: return 2
-    if source_port in {443, 8443} or destination_port in {443, 8443}: return 3
+    if not USE_CUSTOM_L7_MAPPING:
+        return 0
+    if DNS in pkt:
+        return 1
+    if source_port == 21 or destination_port == 21:
+        return 2
+    if source_port in {443, 8443} or destination_port in {443, 8443}:
+        return 3
     return 0
 
 
@@ -124,10 +138,10 @@ def create_flow(source_ip, destination_ip, source_port, destination_port, protoc
         "protocol": int(protocol),
         "first_ts": float(timestamp),
         "last_ts": float(timestamp),
-        "first_in_ts": None,
-        "last_in_ts": None,
-        "first_out_ts": None,
-        "last_out_ts": None,
+        "first_src_to_dst_ts": None,
+        "last_src_to_dst_ts": None,
+        "first_dst_to_src_ts": None,
+        "last_dst_to_src_ts": None,
         "IN_BYTES": 0,
         "IN_PKTS": 0,
         "OUT_BYTES": 0,
@@ -160,52 +174,56 @@ def create_flow(source_ip, destination_ip, source_port, destination_port, protoc
         "DNS_QUERY_TYPE": 0,
         "DNS_TTL_ANSWER": 0,
         "FTP_COMMAND_RET_CODE": 0,
-        "L7_PROTO": 0
+        "L7_PROTO": 0,
     }
 
 
 def update_directional_statistics(flow, pkt, direction):
     timestamp = float(pkt.time)
-    ip_packet_length = int(pkt[IP].len or len(pkt[IP]))
+    ip_length = int(pkt[IP].len or len(pkt[IP]))
     flow["last_ts"] = max(flow["last_ts"], timestamp)
+
+    # IN = initiator/source -> responder/destination.
+    # OUT = responder/destination -> initiator/source.
     if direction == "in":
-        flow["IN_BYTES"] += ip_packet_length
+        flow["IN_BYTES"] += ip_length
         flow["IN_PKTS"] += 1
-        if flow["first_in_ts"] is None: flow["first_in_ts"] = timestamp
-        flow["last_in_ts"] = timestamp
+        if flow["first_src_to_dst_ts"] is None:
+            flow["first_src_to_dst_ts"] = timestamp
+        flow["last_src_to_dst_ts"] = timestamp
     else:
-        flow["OUT_BYTES"] += ip_packet_length
+        flow["OUT_BYTES"] += ip_length
         flow["OUT_PKTS"] += 1
-        if flow["first_out_ts"] is None: flow["first_out_ts"] = timestamp
-        flow["last_out_ts"] = timestamp
+        if flow["first_dst_to_src_ts"] is None:
+            flow["first_dst_to_src_ts"] = timestamp
+        flow["last_dst_to_src_ts"] = timestamp
 
 
 def update_length_statistics(flow, pkt):
-    frame_length = len(pkt)
-    ip_packet_length = int(pkt[IP].len or len(pkt[IP]))
-    flow["LONGEST_FLOW_PKT"] = max(flow["LONGEST_FLOW_PKT"], frame_length)
-    if flow["SHORTEST_FLOW_PKT"] is None:
-        flow["SHORTEST_FLOW_PKT"] = frame_length
-    else:
-        flow["SHORTEST_FLOW_PKT"] = min(flow["SHORTEST_FLOW_PKT"], frame_length)
+    # Training features are IP-length based. Using Ethernet frame length adds
+    # link-layer bytes and causes environment-dependent drift.
+    ip_length = int(pkt[IP].len or len(pkt[IP]))
 
-    flow["MAX_IP_PKT_LEN"] = max(flow["MAX_IP_PKT_LEN"], ip_packet_length)
-    if flow["MIN_IP_PKT_LEN"] is None:
-        flow["MIN_IP_PKT_LEN"] = ip_packet_length
-    else:
-        flow["MIN_IP_PKT_LEN"] = min(flow["MIN_IP_PKT_LEN"], ip_packet_length)
+    flow["LONGEST_FLOW_PKT"] = max(flow["LONGEST_FLOW_PKT"], ip_length)
+    flow["SHORTEST_FLOW_PKT"] = (
+        ip_length if flow["SHORTEST_FLOW_PKT"] is None
+        else min(flow["SHORTEST_FLOW_PKT"], ip_length)
+    )
+    flow["MAX_IP_PKT_LEN"] = max(flow["MAX_IP_PKT_LEN"], ip_length)
+    flow["MIN_IP_PKT_LEN"] = (
+        ip_length if flow["MIN_IP_PKT_LEN"] is None
+        else min(flow["MIN_IP_PKT_LEN"], ip_length)
+    )
 
-    ttl = int(pkt[IP].ttl)
-    if flow["MIN_TTL"] is None:
-        flow["MIN_TTL"] = ttl
-    else:
-        flow["MIN_TTL"] = min(flow["MIN_TTL"], ttl)
+    ttl = int(pkt[IP].ttl or 0)
+    flow["MIN_TTL"] = ttl if flow["MIN_TTL"] is None else min(flow["MIN_TTL"], ttl)
     flow["MAX_TTL"] = max(flow["MAX_TTL"], ttl)
-    update_packet_size_bin(flow, frame_length)
+    update_packet_size_bin(flow, ip_length)
 
 
 def update_tcp_statistics(flow, pkt, direction):
-    if TCP not in pkt: return
+    if TCP not in pkt:
+        return
     flags = int(pkt[TCP].flags)
     window = int(pkt[TCP].window or 0)
     flow["TCP_FLAGS"] |= flags
@@ -218,13 +236,17 @@ def update_tcp_statistics(flow, pkt, direction):
 
 
 def update_retransmission_statistics(flow, pkt, direction):
-    sequence_info = tcp_sequence_range(pkt)
-    if sequence_info is None: return
-    start, end, payload_length = sequence_info
+    info = tcp_sequence_range(pkt)
+    if info is None:
+        return
+    start, end, payload_length = info
     ranges_key = "seen_tcp_ranges_in" if direction == "in" else "seen_tcp_ranges_out"
-    is_retransmission = any(ranges_overlap(start, end, old_start, old_end) for old_start, old_end in flow[ranges_key])
+    retransmission = any(
+        ranges_overlap(start, end, old_start, old_end)
+        for old_start, old_end in flow[ranges_key]
+    )
 
-    if is_retransmission:
+    if retransmission:
         if direction == "in":
             flow["RETRANSMITTED_IN_PKTS"] += 1
             flow["RETRANSMITTED_IN_BYTES"] += payload_length
@@ -236,9 +258,10 @@ def update_retransmission_statistics(flow, pkt, direction):
 
 
 def update_dns_statistics(flow, pkt):
-    if DNS not in pkt: return
+    if DNS not in pkt:
+        return
     dns = pkt[DNS]
-    flow["L7_PROTO"] = 1
+    # Do not set L7_PROTO to an arbitrary custom code.
     flow["DNS_QUERY_ID"] = int(dns.id or 0)
     if dns.qd is not None:
         try:
@@ -248,33 +271,45 @@ def update_dns_statistics(flow, pkt):
             pass
     if int(dns.qr or 0) == 1:
         answer_ttl = first_dns_answer_ttl(dns)
-        if answer_ttl > 0: flow["DNS_TTL_ANSWER"] = answer_ttl
+        if answer_ttl > 0:
+            flow["DNS_TTL_ANSWER"] = answer_ttl
 
 
 def update_icmp_statistics(flow, pkt):
-    if ICMP not in pkt: return
+    if ICMP not in pkt:
+        return
     icmp_type = int(pkt[ICMP].type or 0)
     flow["ICMP_TYPE"] = icmp_type
     flow["ICMP_IPV4_TYPE"] = icmp_type
 
 
 def update_ftp_statistics(flow, pkt):
-    if TCP not in pkt or Raw not in pkt: return
+    if TCP not in pkt or Raw not in pkt:
+        return
     source_port = int(pkt[TCP].sport)
     destination_port = int(pkt[TCP].dport)
-    if source_port != 21 and destination_port != 21: return
-    flow["L7_PROTO"] = 2
+    if source_port != 21 and destination_port != 21:
+        return
     payload = bytes(pkt[Raw].load)
     match = FTP_REPLY_PATTERN.match(payload)
-    if match: flow["FTP_COMMAND_RET_CODE"] = int(match.group(1))
+    if match:
+        flow["FTP_COMMAND_RET_CODE"] = int(match.group(1))
 
 
 def finalize_flow(flow):
     flow_duration_ms = max(0.0, (flow["last_ts"] - flow["first_ts"]) * 1000.0)
-    duration_in_ms = directional_duration_ms(flow["first_in_ts"], flow["last_in_ts"])
-    duration_out_ms = directional_duration_ms(flow["first_out_ts"], flow["last_out_ts"])
-    src_second_bytes = calculate_second_bytes(flow["IN_BYTES"], flow["first_in_ts"], flow["last_in_ts"])
-    dst_second_bytes = calculate_second_bytes(flow["OUT_BYTES"], flow["first_out_ts"], flow["last_out_ts"])
+    duration_in_ms = directional_duration_ms(
+        flow["first_src_to_dst_ts"], flow["last_src_to_dst_ts"]
+    )
+    duration_out_ms = directional_duration_ms(
+        flow["first_dst_to_src_ts"], flow["last_dst_to_src_ts"]
+    )
+    src_rate = calculate_second_bytes(
+        flow["IN_BYTES"], flow["first_src_to_dst_ts"], flow["last_src_to_dst_ts"]
+    )
+    dst_rate = calculate_second_bytes(
+        flow["OUT_BYTES"], flow["first_dst_to_src_ts"], flow["last_dst_to_src_ts"]
+    )
 
     return {
         "PROTOCOL": flow["protocol"],
@@ -292,17 +327,17 @@ def finalize_flow(flow):
         "MIN_TTL": flow["MIN_TTL"] if flow["MIN_TTL"] is not None else 0,
         "MAX_TTL": flow["MAX_TTL"],
         "LONGEST_FLOW_PKT": flow["LONGEST_FLOW_PKT"],
-        "SHORTEST_FLOW_PKT": flow["SHORTEST_FLOW_PKT"] if flow["SHORTEST_FLOW_PKT"] is not None else 0,
-        "MIN_IP_PKT_LEN": flow["MIN_IP_PKT_LEN"] if flow["MIN_IP_PKT_LEN"] is not None else 0,
+        "SHORTEST_FLOW_PKT": flow["SHORTEST_FLOW_PKT"] or 0,
+        "MIN_IP_PKT_LEN": flow["MIN_IP_PKT_LEN"] or 0,
         "MAX_IP_PKT_LEN": flow["MAX_IP_PKT_LEN"],
-        "SRC_TO_DST_SECOND_BYTES": src_second_bytes,
-        "DST_TO_SRC_SECOND_BYTES": dst_second_bytes,
+        "SRC_TO_DST_SECOND_BYTES": src_rate,
+        "DST_TO_SRC_SECOND_BYTES": dst_rate,
         "RETRANSMITTED_IN_BYTES": flow["RETRANSMITTED_IN_BYTES"],
         "RETRANSMITTED_IN_PKTS": flow["RETRANSMITTED_IN_PKTS"],
         "RETRANSMITTED_OUT_BYTES": flow["RETRANSMITTED_OUT_BYTES"],
         "RETRANSMITTED_OUT_PKTS": flow["RETRANSMITTED_OUT_PKTS"],
-        "SRC_TO_DST_AVG_THROUGHPUT": src_second_bytes * 8.0,
-        "DST_TO_SRC_AVG_THROUGHPUT": dst_second_bytes * 8.0,
+        "SRC_TO_DST_AVG_THROUGHPUT": src_rate * 8.0,
+        "DST_TO_SRC_AVG_THROUGHPUT": dst_rate * 8.0,
         "NUM_PKTS_UP_TO_128_BYTES": flow["NUM_PKTS_UP_TO_128_BYTES"],
         "NUM_PKTS_128_TO_256_BYTES": flow["NUM_PKTS_128_TO_256_BYTES"],
         "NUM_PKTS_256_TO_512_BYTES": flow["NUM_PKTS_256_TO_512_BYTES"],
@@ -315,40 +350,52 @@ def finalize_flow(flow):
         "DNS_QUERY_ID": flow["DNS_QUERY_ID"],
         "DNS_QUERY_TYPE": flow["DNS_QUERY_TYPE"],
         "DNS_TTL_ANSWER": flow["DNS_TTL_ANSWER"],
-        "FTP_COMMAND_RET_CODE": flow["FTP_COMMAND_RET_CODE"]
+        "FTP_COMMAND_RET_CODE": flow["FTP_COMMAND_RET_CODE"],
     }
 
 
-# ==========================================================
-# ANA FONKSIYON: live_soc.py TARAFINDAN ÇAĞRILACAK KISIM
-# ==========================================================
+def validate_feature_schema(features, feature_names):
+    feature_names = list(feature_names)
+    duplicate_expected = pd.Index(feature_names)[pd.Index(feature_names).duplicated()].tolist()
+    if duplicate_expected:
+        raise ValueError(f"feature_names.joblib duplicate columns: {duplicate_expected}")
+
+    missing = [name for name in feature_names if name not in features.columns]
+    extras = [name for name in features.columns if name not in feature_names]
+
+    if missing:
+        print("FEATURE SCHEMA INFO -> missing columns filled with 0:", missing)
+    if extras:
+        print("FEATURE SCHEMA INFO -> unused extracted columns:", extras)
+
+    for column in missing:
+        features[column] = 0.0
+
+    aligned = features.loc[:, feature_names].copy()
+    if list(aligned.columns) != feature_names:
+        raise RuntimeError("Feature column order could not be aligned.")
+    return aligned
+
 
 def extract_features_from_pcap(pcap_path):
-    """
-    Belirtilen PCAP dosyasını okur, paketleri flowlara gruplar ve her flow'un
-    özniteliklerini XGBoost modeline girecek formata dönüştürür.
-
-    Dönüş:
-    (features_df, flow_packets)
-    - features_df: Model tahminine uygun DataFrame
-    - flow_packets: Dictionary. Key: (src, dst, sport, dport, proto), Value: [paket, paket, ...]
-      Sözlük sırası features_df satır sırasıyla aynıdır.
-    """
     packets = rdpcap(str(pcap_path))
     flows = {}
-
-    # live_soc.py ham PCAP çıkarmak istediği için paketleri flowlara göre saklıyoruz.
     flow_packets = {}
 
     for pkt in packets:
-        if IP not in pkt: continue
+        if IP not in pkt:
+            continue
 
-        source_ip = pkt[IP].src
-        destination_ip = pkt[IP].dst
+        source_ip = str(pkt[IP].src)
+        destination_ip = str(pkt[IP].dst)
         source_port, destination_port, protocol = get_transport_info(pkt)
 
-        forward_key = make_forward_key(source_ip, destination_ip, source_port, destination_port, protocol)
-        reverse_key = make_reverse_key(source_ip, destination_ip, source_port, destination_port, protocol)
+        forward_key = make_forward_key(
+            source_ip, destination_ip, source_port, destination_port, protocol
+        )
+        reverse_key = make_reverse_key(
+            source_ip, destination_ip, source_port, destination_port, protocol
+        )
 
         if forward_key in flows:
             flow_key = forward_key
@@ -360,12 +407,12 @@ def extract_features_from_pcap(pcap_path):
             flow_key = forward_key
             direction = "in"
             flows[flow_key] = create_flow(
-                source_ip=source_ip,
-                destination_ip=destination_ip,
-                source_port=source_port,
-                destination_port=destination_port,
-                protocol=protocol,
-                timestamp=float(pkt.time)
+                source_ip,
+                destination_ip,
+                source_port,
+                destination_port,
+                protocol,
+                float(pkt.time),
             )
             flow_packets[flow_key] = []
 
@@ -381,36 +428,51 @@ def extract_features_from_pcap(pcap_path):
         update_ftp_statistics(flow, pkt)
 
         detected_l7 = detect_l7_protocol(pkt, source_port, destination_port)
-        if flow["L7_PROTO"] == 0:
+        if flow["L7_PROTO"] == 0 and detected_l7 != 0:
             flow["L7_PROTO"] = detected_l7
 
-    feature_rows = [finalize_flow(flow) for flow in flows.values()]
-
-    if not feature_rows:
+    if not flows:
         return pd.DataFrame(), {}
 
+    # Dict insertion order keeps rows aligned with flow_packets keys.
+    feature_rows = [finalize_flow(flow) for flow in flows.values()]
     features = pd.DataFrame(feature_rows)
 
-    try:
-        feature_names = joblib.load(FEATURE_NAMES_PATH)
+    if not FEATURE_NAMES_PATH.exists():
+        raise FileNotFoundError(
+            f"Model feature artifact not found: {FEATURE_NAMES_PATH}"
+        )
 
-        # Olası eksik feature'ları tamamla
-        for col in feature_names:
-            if col not in features.columns:
-                features[col] = 0.0
+    feature_names = list(joblib.load(FEATURE_NAMES_PATH))
+    features = validate_feature_schema(features, feature_names)
 
-        # Sütunları modelin eğitildiği sıra ile aynı hale getir
-        features = features[feature_names].copy()
-    except Exception as e:
-        print(f"Warning: feature_names.joblib failed to load: {e}")
-
-    # XGBoost için güvenli format (NaN, Inf temizliği)
     features = features.apply(pd.to_numeric, errors="coerce")
-    features = features.replace([np.inf, -np.inf], np.nan)
-    features = features.fillna(0.0)
+    features = features.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    FLOAT32_SAFE_LIMIT = np.finfo(np.float32).max / 10.0
-    features = features.clip(lower=-FLOAT32_SAFE_LIMIT, upper=FLOAT32_SAFE_LIMIT)
+    float32_limit = np.finfo(np.float32).max / 10.0
+    features = features.clip(lower=-float32_limit, upper=float32_limit)
     features = features.astype(np.float32)
+
+    # Runtime diagnostics: catches extractor/model drift immediately.
+    if not np.isfinite(features.to_numpy()).all():
+        raise ValueError("Non-finite values remained after feature sanitization.")
+
+    print(
+        "FEATURE CHECK ->",
+        f"rows={len(features)}",
+        f"columns={features.shape[1]}",
+        f"expected={len(feature_names)}",
+        f"order_match={list(features.columns) == feature_names}",
+    )
+
+    zero_duration_count = int((features.get("FLOW_DURATION_MILLISECONDS", 0) == 0).sum())
+    short_flow_count = int(
+        ((features.get("IN_PKTS", 0) + features.get("OUT_PKTS", 0)) <= 2).sum()
+    )
+    print(
+        "FEATURE QUALITY ->",
+        f"zero_duration={zero_duration_count}",
+        f"flows_with_2_or_fewer_packets={short_flow_count}",
+    )
 
     return features, flow_packets
