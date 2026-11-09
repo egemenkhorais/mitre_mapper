@@ -28,13 +28,16 @@ import asyncio
 import copy
 import hashlib
 import inspect
+import ipaddress
 import itertools
 import json
 import os
+import queue
 import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import uuid
@@ -83,10 +86,22 @@ from mitre_runner import (
     safe_json_value,
 )
 
+from action_agent import (
+    run_action_agent,
+    skipped_action,
+)
+
 
 # ==========================================================
 # ASYNCIO INITIALIZATION
 # ==========================================================
+
+def _pyshark_loop_exception_handler(loop, context):
+    exc = context.get("exception")
+    if isinstance(exc, (EOFError, asyncio.CancelledError)):
+        return
+    loop.default_exception_handler(context)
+
 
 def ensure_event_loop():
     """
@@ -101,12 +116,12 @@ def ensure_event_loop():
         if loop.is_closed():
             raise RuntimeError("event loop is closed")
 
-        return loop
-
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        return loop
+
+    loop.set_exception_handler(_pyshark_loop_exception_handler)
+    return loop
 
 
 event_loop = ensure_event_loop()
@@ -116,7 +131,7 @@ event_loop = ensure_event_loop()
 # CONFIG
 # ==========================================================
 
-INTERFACE = "en0"
+INTERFACE = ["en0", "lo0"]
 
 FLOW_TIMEOUT = 10
 FLOW_BATCH_SIZE = 100
@@ -151,9 +166,18 @@ VALIDATOR_WARMUP_ENABLED = True
 # "auto"      -> verdict Malicious / Suspicious(>= eşik) ise MITRE otomatik
 # "on_demand" -> MITRE yalnızca dashboard'daki "MITRE Eşle" butonuyla
 # "off"       -> MITRE hiç çalışmaz
-MITRE_MODE = "on_demand"
+MITRE_MODE = "auto"
 MITRE_WARMUP_ENABLED = False
 MITRE_DEBUG = False
+
+# "auto"      -> doğrulanmış saldırıda Action Agent otomatik çalışır
+# "on_demand" -> Action Agent yalnızca dashboard'daki "Aksiyon Al" butonuyla
+# "off"       -> Action Agent hiç çalışmaz
+ACTION_MODE = "auto"
+
+# True: Qwen Validator + MITRE + Action Agent arka plan kuyruğunda (worker thread)
+#       asenkron çalışır; paket yakalama döngüsü hiç bloklanmaz ve buffer'da paket kaybolmaz!
+ASYNC_LLM_PIPELINE = True
 
 # Suspicious verdict'in MITRE'ye geçmesi için minimum Qwen güveni.
 SUSPICIOUS_MITRE_MIN_CONFIDENCE = 0.80
@@ -371,6 +395,46 @@ def create_alert_paths(
 # FLOW KEY
 # ==========================================================
 
+SIMULATED_ATTACKER_IP = "185.220.101.46"
+SIMULATED_PORT_MIN = 44000
+SIMULATED_PORT_MAX = 46000
+
+SIMULATED_ATTACKER_RANGES = (
+    (44000, 44300, "185.220.101.46"),  # Senaryo 1: SQL Injection
+    (44300, 44600, "45.155.205.233"),  # Senaryo 2: XSS
+    (44600, 44900, "91.240.118.172"),  # Senaryo 3: Path Traversal / LFI
+    (44900, 45200, "193.32.162.159"),  # Senaryo 4: Command Injection / RCE
+    (45200, 45500, "103.145.13.88"),   # Senaryo 5: HTTP Credential Brute Force
+    (45500, 45750, "194.26.29.114"),   # Senaryo 6: API Parameter Enumeration (IDOR)
+    (45750, 46000, "162.142.125.10"),  # Senaryo 7: Multi-Port TCP Service Scan
+)
+
+
+def _simulated_attacker_ip_for_port(port):
+    p = int(port or 0)
+    for lo, hi, ip in SIMULATED_ATTACKER_RANGES:
+        if lo <= p < hi:
+            return ip
+    return SIMULATED_ATTACKER_IP
+
+
+def _detect_local_server_ip():
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "192.168.1.10"
+
+
+LOCAL_SERVER_IP = _detect_local_server_ip()
+
+
 def get_flow_key(packet):
     try:
         if not hasattr(packet, "ip"):
@@ -395,9 +459,28 @@ def get_flow_key(packet):
         else:
             return None
 
+        if sport == 11434 or dport == 11434:
+            return None
+
+        src_ip = str(packet.ip.src)
+        dst_ip = str(packet.ip.dst)
+
+        if src_ip == "127.0.0.1" or dst_ip == "127.0.0.1" or src_ip == dst_ip:
+            if proto != 6:
+                return None
+            if SIMULATED_PORT_MIN <= sport < SIMULATED_PORT_MAX:
+                src_ip = _simulated_attacker_ip_for_port(sport)
+                dst_ip = LOCAL_SERVER_IP
+            elif SIMULATED_PORT_MIN <= dport < SIMULATED_PORT_MAX:
+                src_ip = LOCAL_SERVER_IP
+                dst_ip = _simulated_attacker_ip_for_port(dport)
+            else:
+                # Tarayıcının kendi Dashboard (127.0.0.1:8765/api/alerts) sorgularını yakalama
+                return None
+
         return (
-            str(packet.ip.src),
-            str(packet.ip.dst),
+            src_ip,
+            dst_ip,
             sport,
             dport,
             proto,
@@ -541,6 +624,40 @@ def decide(label, confidence):
 # PCAP EXPORT
 # ==========================================================
 
+def _raw_bytes_to_ether(raw_bytes):
+    """
+    en0 (Ethernet) ve lo0 (macOS BSD Loopback DLT_NULL 4-byte header)
+    paketlerini ortak standart Ethernet + IP çerçevesine dönüştürür.
+    Ayrıca tek cihazda (attack_test.py) yapılan simülasyon paketlerinin IP
+    başlıklarını dış saldırgan (185.220.101.46) <-> yerel sunucu olarak yazar.
+    """
+    raw_b = bytes(raw_bytes)
+    if (
+        len(raw_b) >= 24
+        and raw_b[:4] in (b"\x02\x00\x00\x00", b"\x00\x00\x00\x02")
+        and (raw_b[4] >> 4) == 4
+    ):
+        ip_pkt = IP(raw_b[4:])
+        if ip_pkt.haslayer(TCP) and (ip_pkt.src == "127.0.0.1" or ip_pkt.dst == "127.0.0.1" or ip_pkt.src == ip_pkt.dst):
+            sport = int(ip_pkt[TCP].sport)
+            dport = int(ip_pkt[TCP].dport)
+            if SIMULATED_PORT_MIN <= sport < SIMULATED_PORT_MAX:
+                ip_pkt.src = _simulated_attacker_ip_for_port(sport)
+                ip_pkt.dst = LOCAL_SERVER_IP
+                del ip_pkt.chksum
+                del ip_pkt[TCP].chksum
+            elif SIMULATED_PORT_MIN <= dport < SIMULATED_PORT_MAX:
+                ip_pkt.src = LOCAL_SERVER_IP
+                ip_pkt.dst = _simulated_attacker_ip_for_port(dport)
+                del ip_pkt.chksum
+                del ip_pkt[TCP].chksum
+        return (
+            Ether(src="00:00:00:00:00:01", dst="00:00:00:00:00:02", type=0x0800)
+            / ip_pkt
+        )
+    return Ether(raw_b)
+
+
 def convert_to_scapy_packets(packets):
     scapy_packets = []
 
@@ -558,18 +675,14 @@ def convert_to_scapy_packets(packets):
                     packet,
                     (bytes, bytearray)
             ):
-                scapy_packet = Ether(
-                    bytes(packet)
-                )
+                scapy_packet = _raw_bytes_to_ether(packet)
 
             elif hasattr(
                     packet,
                     "get_raw_packet"
             ):
-                scapy_packet = Ether(
-                    bytes(
-                        packet.get_raw_packet()
-                    )
+                scapy_packet = _raw_bytes_to_ether(
+                    packet.get_raw_packet()
                 )
 
             elif hasattr(packet, "haslayer"):
@@ -602,6 +715,7 @@ def convert_to_scapy_packets(packets):
 def export_flow_packets(
         packets,
         output_file,
+        verbose=True,
 ):
     output_path = Path(output_file)
 
@@ -636,12 +750,13 @@ def export_flow_packets(
         )
         return False
 
-    print(
-        "PCAP EXPORTED ->",
-        output_path,
-        f"packets={len(scapy_packets)}",
-        f"bytes={output_path.stat().st_size}"
-    )
+    if verbose:
+        print(
+            "PCAP EXPORTED ->",
+            output_path,
+            f"packets={len(scapy_packets)}",
+            f"bytes={output_path.stat().st_size}"
+        )
 
     return True
 
@@ -817,7 +932,7 @@ def extract_http_request_from_pcap(pcap_file, extra_ports=None):
             display_filter="http.request or http.response",
             custom_parameters=decode_params,
             keep_packets=False,
-            use_json=True,
+            use_json=False,
             eventloop=event_loop,
         )
 
@@ -831,18 +946,19 @@ def extract_http_request_from_pcap(pcap_file, extra_ports=None):
             http_layer = packet.http
 
             method = _field_text(getattr(http_layer, "request_method", None))
+            response_code = _field_text(getattr(http_layer, "response_code", None))
 
-            # Sunucu yanıtı (istek metodu yok, durum kodu var)
-            if not method:
+            # Sunucu yanıtı (istek metodu yok veya response_code var -> yanıt paketidir)
+            if response_code or not method:
                 response = _extract_http_response(http_layer)
 
                 if response is not None:
                     responses.append(response)
-                    continue
+                continue
 
             uri = _field_text(
-                getattr(http_layer, "request_full_uri", None)
-                or getattr(http_layer, "request_uri", None)
+                getattr(http_layer, "request_uri", None)
+                or getattr(http_layer, "request_full_uri", None)
             )
             version = _field_text(
                 getattr(http_layer, "request_version", None)
@@ -865,7 +981,8 @@ def extract_http_request_from_pcap(pcap_file, extra_ports=None):
             path, query = None, None
 
             if uri:
-                path, _, query = uri.partition("?")
+                clean_uri = re.sub(r"^https?://[^/]+", "", uri) or "/"
+                path, _, query = clean_uri.partition("?")
                 query = query or None
 
             if any([method, path, query, body]):
@@ -960,24 +1077,33 @@ def extract_http_request_from_pcap(pcap_file, extra_ports=None):
                 pass
 
 
-def run_layer2_for_exported_flow(layer1_label, pcap_file, flow_ports=None):
+def run_layer2_for_exported_flow(
+        layer1_label,
+        pcap_file,
+        flow_ports=None,
+        protocol=6,
+):
     """
     HTTP kanıtı artık Layer 1 etiketinden BAĞIMSIZ çıkarılır (blind
     validation için: "web attack" demeyen ama HTTP içeren akışlarda da
     LLM payload'u görebilsin; ayrıca kanıtın varlığı etiketi sızdırmasın).
-    Layer 2 sınıflandırıcı ise yine yalnızca web etiketlerinde çalışır.
+    Yalnızca TCP (protocol==6) akışlarında tshark HTTP dissector çalıştırılır;
+    UDP akışlarında gereksiz tshark subprocess yükü engellenir.
     """
-    evidence = extract_http_request_from_pcap(
-        pcap_file,
-        extra_ports=flow_ports,
-    )
+    if int(protocol or 0) == 6:
+        evidence = extract_http_request_from_pcap(
+            pcap_file,
+            extra_ports=flow_ports,
+        )
+    else:
+        evidence = None
 
     layer2_dict = None
 
-    if should_run_layer2(layer1_label):
-        if evidence is None:
-            layer2_dict = layer2_classifier.classify(None).to_dict()
-        else:
+    # HTTP kanıtı varsa Layer 1 etiketi ne olursa olsun ("Reconnaissance" dahil)
+    # Layer 2 Payload sınıflandırıcıyı çalıştır; böylece SQLi/XSS kaçmaz!
+    try:
+        if evidence is not None:
             layer2_dict = layer2_classifier.classify_http_request(
                 method=evidence["method"],
                 path=evidence["path"],
@@ -985,6 +1111,11 @@ def run_layer2_for_exported_flow(layer1_label, pcap_file, flow_ports=None):
                 body=evidence["body"],
                 headers=evidence["headers"],
             ).to_dict()
+        elif should_run_layer2(layer1_label):
+            layer2_dict = layer2_classifier.classify(None).to_dict()
+    except Exception as exc:
+        print("LAYER2 classification warning ->", repr(exc))
+        layer2_dict = None
 
     if evidence is None:
         return layer2_dict, None
@@ -1018,8 +1149,12 @@ source_activity = defaultdict(
     lambda: deque(maxlen=SOURCE_MAX_EVENTS)
 )
 
+source_http_activity = defaultdict(
+    lambda: deque(maxlen=40)
+)
 
-def update_source_activity(flow_info):
+
+def update_source_activity(flow_info, record=True):
     """
     Kaynak IP'nin son SOURCE_WINDOW_SECONDS içindeki davranışını özetler.
     """
@@ -1028,14 +1163,15 @@ def update_source_activity(flow_info):
 
     events = source_activity[src_ip]
 
-    events.append(
-        (
-            now,
-            flow_info["dst_ip"],
-            flow_info["dst_port"],
-            flow_info["protocol"],
+    if record:
+        events.append(
+            (
+                now,
+                flow_info["dst_ip"],
+                flow_info["dst_port"],
+                flow_info["protocol"],
+            )
         )
-    )
 
     cutoff = now - SOURCE_WINDOW_SECONDS
 
@@ -1062,6 +1198,119 @@ def update_source_activity(flow_info):
     }
 
 
+def update_source_http_activity(
+        src_ip,
+        http_evidence,
+        activity,
+        behavioral_findings,
+):
+    """
+    Aynı kaynak IP'den gelen ardışık HTTP isteklerini (örn. /api/users?id=1, id=2, id=3
+    veya /login denemeleri) akışlar arasında birleştirir; hem `activity` içine
+    `recent_http_requests` ekler (Qwen tüm diziyi görsün diye) hem de parametre
+    taraması / IDOR / brute-force varsa `behavioral_findings` listesine ekler.
+    """
+    if not isinstance(http_evidence, dict) or not http_evidence:
+        return
+
+    if _is_benign_dashboard_polling(http_evidence):
+        return
+
+    now = time.time()
+    history = source_http_activity[src_ip]
+    cutoff = now - SOURCE_WINDOW_SECONDS
+
+    while history and history[0][0] < cutoff:
+        history.popleft()
+
+    method = str(http_evidence.get("method") or "GET").strip()
+    raw_paths = [
+        p.strip()
+        for p in str(http_evidence.get("path") or "").splitlines()
+        if p.strip()
+    ]
+    raw_queries = [
+        q.strip()
+        for q in str(http_evidence.get("query") or "").splitlines()
+        if q.strip()
+    ]
+    norm_path = re.sub(r"^https?://[^/]+", "", raw_paths[0]) if raw_paths else "/"
+    query_str = raw_queries[0] if raw_queries else ""
+    body_str = str(http_evidence.get("body_preview") or "").strip()[:120]
+    resp_codes = [str(c) for c in (http_evidence.get("response_codes") or [])]
+
+    req_summary = f"{method} {norm_path}" + (f"?{query_str}" if query_str else "")
+    if body_str:
+        req_summary += f" [body: {body_str[:60]}]"
+    if resp_codes:
+        req_summary += f" -> HTTP {resp_codes[0]}"
+    history.append((now, method, norm_path, query_str, req_summary, body_str, resp_codes))
+
+    recent_list = [item[4] for item in history][-10:]
+    if isinstance(activity, dict):
+        activity["recent_http_requests"] = recent_list
+        activity["http_request_count_in_window"] = len(history)
+
+    # 1) HTTP Credential Brute Force (/login, /api/login, /auth vb. veya ardışık 401/403 yanıtları)
+    is_auth_endpoint = any(
+        tok in norm_path.lower()
+        for tok in ("/login", "/signin", "/auth", "/session", "/token")
+    )
+    auth_attempts = [
+        item for item in history
+        if any(tok in item[2].lower() for tok in ("/login", "/signin", "/auth", "/session", "/token"))
+        or ("401" in item[6])
+    ]
+    already_brute = any(
+        isinstance(b, dict) and b.get("behavior") == "http_credential_brute_force"
+        for b in (behavioral_findings or [])
+    )
+    if (is_auth_endpoint or "401" in resp_codes) and len(auth_attempts) >= 3 and not already_brute and isinstance(behavioral_findings, list):
+        behavioral_findings.append(
+            {
+                "behavior": "http_credential_brute_force",
+                "score": 40,
+                "confidence": 0.94,
+                "mitre": "T1110.001",
+                "evidence": {
+                    "endpoint": norm_path,
+                    "attempt_count": len(auth_attempts),
+                    "recent_attempts": [item[4] for item in auth_attempts[-8:]],
+                },
+            }
+        )
+        return
+
+    # 2) Aynı endpoint'e farklı query parametreleriyle ardışık istekler (örn. id=1, id=2, id=3)
+    same_path_queries = [
+        item[3]
+        for item in history
+        if item[2] == norm_path and item[3]
+    ]
+    distinct_queries = list(dict.fromkeys(same_path_queries))
+
+    already_flagged = any(
+        isinstance(b, dict) and b.get("behavior") == "http_parameter_enumeration"
+        for b in (behavioral_findings or [])
+    )
+
+    if len(distinct_queries) >= 2 and not already_flagged and isinstance(behavioral_findings, list):
+        behavioral_findings.append(
+            {
+                "behavior": "http_parameter_enumeration",
+                "score": 35,
+                "confidence": 0.92,
+                "mitre": "T1595.002",
+                "evidence": {
+                    "endpoint": norm_path,
+                    "distinct_query_count": len(distinct_queries),
+                    "observed_queries": distinct_queries[-8:],
+                    "recent_requests": recent_list[-8:],
+                },
+            }
+        )
+
+
 def cleanup_source_activity():
     cutoff = time.time() - SOURCE_WINDOW_SECONDS
 
@@ -1070,6 +1319,12 @@ def cleanup_source_activity():
 
         if not events or events[-1][0] < cutoff:
             del source_activity[src_ip]
+
+    for src_ip in list(source_http_activity.keys()):
+        events = source_http_activity[src_ip]
+
+        if not events or events[-1][0] < cutoff:
+            del source_http_activity[src_ip]
 
 
 # ==========================================================
@@ -1101,12 +1356,12 @@ def _telemetry_items(packets):
         try:
             if isinstance(packet, (bytes, bytearray)):
                 raw = bytes(packet)
-                parsed = Ether(raw)
+                parsed = _raw_bytes_to_ether(raw)
                 size = len(raw)
 
             elif hasattr(packet, "get_raw_packet"):
                 raw = bytes(packet.get_raw_packet())
-                parsed = Ether(raw)
+                parsed = _raw_bytes_to_ether(raw)
                 size = len(raw)
 
             elif hasattr(packet, "haslayer"):
@@ -1410,9 +1665,11 @@ LAYER2_NON_ATTACK_LABELS = {
     "",
     "none",
     "unknown",
+    "unknown_web_attack",
     "benign",
     "normal",
     "uncertain",
+    "abstain",
 }
 
 
@@ -1433,11 +1690,115 @@ def has_layer2_attack_evidence(layer2_result):
     if not isinstance(layer2_result, dict):
         return False
 
+    status = str(layer2_result.get("status") or "").strip().lower()
+    if status != "classified":
+        return False
+
     label = normalize_layer2_label(
         layer2_result.get("label") or ""
     )
 
     return label not in LAYER2_NON_ATTACK_LABELS
+
+
+LOCAL_NOISE_UDP_PORTS = {53, 67, 68, 123, 137, 138, 1900, 5353, 5355}
+
+
+def _is_multicast_or_local_noise(flow_info):
+    """
+    SSDP (239.255.255.250:1900), mDNS (224.0.0.251:5353), Broadcast
+    (255.255.255.255), Link-Local (169.254.x.x) ve rutin UDP yerel keşif
+    paketlerinin Qwen kuyruğunu şişirmesini engeller.
+    """
+    if not isinstance(flow_info, dict):
+        return False
+
+    for key in ("src_ip", "dst_ip"):
+        ip_text = str(flow_info.get(key) or "").strip()
+        if not ip_text:
+            continue
+        if ip_text == "255.255.255.255" or ip_text.endswith(".255"):
+            return True
+        try:
+            ip_obj = ipaddress.ip_address(ip_text)
+            if (
+                ip_obj.is_multicast
+                or ip_obj.is_link_local
+                or ip_obj.is_unspecified
+            ):
+                return True
+        except ValueError:
+            pass
+
+    proto = int(flow_info.get("protocol") or 0)
+    src_port = int(flow_info.get("src_port") or 0)
+    dst_port = int(flow_info.get("dst_port") or 0)
+
+    if proto == 17 and (
+        src_port in LOCAL_NOISE_UDP_PORTS
+        or dst_port in LOCAL_NOISE_UDP_PORTS
+    ):
+        return True
+
+    return False
+
+
+def _is_routine_encrypted_port_443(flow_info):
+    """
+    Port 443 (TLS/HTTPS veya QUIC) trafiğinde açık metin HTTP payload'u yoktur.
+    Davranışsal anomali (tarama/flood) veya telemetri anomalisi yoksa rutin
+    arka plan HTTPS trafiğinin Qwen kuyruğunu tıkamasını önler.
+    """
+    if not isinstance(flow_info, dict):
+        return False
+
+    src_port = int(flow_info.get("src_port") or 0)
+    dst_port = int(flow_info.get("dst_port") or 0)
+
+    return src_port == 443 or dst_port == 443
+
+
+DASHBOARD_API_PATHS = {
+    "/",
+    "/index.html",
+    "/dashboard.html",
+    "/favicon.ico",
+    "/api/health",
+    "/api/alerts",
+    "/api/stats",
+    "/api/matrix",
+    "/api/mappings",
+    "/api/navigator",
+    "/api/stream",
+}
+
+
+def _is_benign_dashboard_polling(http_evidence):
+    """
+    Dashboard'un kendi rutin API sorgularının (örn. /api/alerts?limit=500)
+    has_query=True yüzünden saldırı sanılıp Qwen kuyruğuna girmesini önler.
+    """
+    if not isinstance(http_evidence, dict):
+        return False
+
+    paths = [
+        p.strip()
+        for p in str(http_evidence.get("path") or "").splitlines()
+        if p.strip()
+    ]
+    if not paths:
+        return False
+
+    for p in paths:
+        norm_p = re.sub(r"^https?://[^/]+", "", p) or "/"
+        if norm_p not in DASHBOARD_API_PATHS and not norm_p.startswith("/api/alerts/") and not norm_p.startswith("/api/technique/"):
+            return False
+
+    query = str(http_evidence.get("query") or "").strip()
+    if query and not re.fullmatch(r"(limit=\d+|force=[01]|[\s&])+", query):
+        return False
+
+    return not bool(http_evidence.get("has_body"))
 
 
 def should_run_validator(
@@ -1447,40 +1808,48 @@ def should_run_validator(
         layer2_result,
         layer1_label=None,
         flow_telemetry=None,
+        flow_info=None,
+        http_evidence=None,
 ):
     """
     Kanıt kapısı: Qwen'e "gerçekten saldırı mı?" diye sormaya değer mi?
-    Yalnızca (etiket + düşük güven) ile Qwen çağrılmaz.
+    1) Gerçek HTTP payload / Layer 2 saldırı / Davranışsal anomali / Telemetri
+       anomalisi varsa doğrudan geçirir.
+    2) Multicast/Broadcast (SSDP, mDNS vb.) ve davranış/telemetri anomalisi
+       olmayan şifreli 443 (HTTPS/QUIC) gürültüsünü filtreler.
+    3) Correlation engine her >=0.50 akışa otomatik 'medium' ve risk>=50
+       verdiği için, tek başına 'medium' korelasyonun kapıyı delmesi engellenir.
     """
+    if has_layer2_attack_evidence(layer2_result):
+        return True, "layer2_attack"
+
+    http_evidence = http_evidence or {}
+    if _is_benign_dashboard_polling(http_evidence) and not behavioral_findings:
+        return False, "benign_dashboard_ui_polling"
+
+    if http_evidence.get("has_query") or http_evidence.get("has_body"):
+        return True, "http_payload_evidence"
+
     if behavioral_findings:
         return True, "behavioral_findings"
 
-    severity = str(
-        correlation_data.get("severity", "informational")
-    ).lower()
-
-    if (
-        SEVERITY_RANK.get(severity, 0)
-        >= SEVERITY_RANK[VALIDATOR_MIN_SEVERITY]
-    ):
-        return True, f"correlation_severity={severity}"
-
-    if (
-        float(correlation_data.get("risk_score", 0) or 0)
-        >= VALIDATOR_MIN_RISK_SCORE
-    ):
-        return True, "correlation_risk_score"
-
     telemetry_reason = telemetry_anomaly_reason(flow_telemetry)
-
     if telemetry_reason:
         return True, f"flow_telemetry={telemetry_reason}"
 
+    if _is_multicast_or_local_noise(flow_info):
+        return False, "multicast_or_local_discovery_noise"
+
+    has_plaintext_http = bool(http_evidence.get("request_count"))
+
+    if _is_routine_encrypted_port_443(flow_info) and not has_plaintext_http:
+        return False, "encrypted_port_443_without_behavior_or_payload"
+
+    if has_plaintext_http and confidence >= REVIEW_THRESHOLD:
+        return True, "plaintext_http_request"
+
     if confidence < REVIEW_THRESHOLD:
         return False, "below_review_threshold_and_no_supporting_evidence"
-
-    if has_layer2_attack_evidence(layer2_result):
-        return True, "layer2_attack"
 
     is_benign_label = (
         str(layer1_label).strip().lower() == "benign"
@@ -1580,6 +1949,28 @@ def build_assessment_signature(
     http_evidence = http_evidence or {}
     activity = activity or {}
 
+    raw_paths = [
+        p.strip()
+        for p in str(http_evidence.get("path") or "").splitlines()
+        if p.strip()
+    ]
+    norm_path = re.sub(r"^https?://[^/]+", "", raw_paths[0]) if raw_paths else None
+
+    # Eğer Layer 2 açık bir exploit (SQLi/XSS/Traversal) bulmadıysa ama HTTP
+    # akışı veya parametre taraması (http_parameter_enumeration) varsa, id=1..100
+    # gibi 100 farklı query parametresinin 100 ayrı imza üretip kuyruğu şişirmesini önle:
+    if http_evidence and not has_layer2_attack_evidence(layer2_result):
+        return (
+            "http_flow_non_layer2",
+            flow_info.get("src_ip"),
+            flow_info.get("dst_port"),
+            flow_info.get("protocol"),
+            behaviors,
+            http_evidence.get("method"),
+            norm_path,
+            _short_hash(http_evidence.get("body_preview")),
+        )
+
     response_codes = tuple(
         sorted(
             str(code)
@@ -1596,7 +1987,7 @@ def build_assessment_signature(
         str(correlation_data.get("severity", "informational")).lower(),
         normalize_layer2_label(layer2_result.get("label") or ""),
         http_evidence.get("method"),
-        http_evidence.get("path"),
+        norm_path,
         _short_hash(http_evidence.get("query")),
         _short_hash(http_evidence.get("body_preview")),
         response_codes,
@@ -1627,6 +2018,9 @@ def should_bypass_cooldown(
     if has_layer2_attack_evidence(layer2_result):
         return True, "layer2_attack_evidence"
 
+    if behavioral_findings:
+        return True, "behavioral_findings"
+
     previously_attack = False
 
     if isinstance(last_validation, dict) and (
@@ -1645,9 +2039,6 @@ def should_bypass_cooldown(
     if previously_attack:
         return False, None
 
-    if behavioral_findings:
-        return True, "behavioral_findings_after_non_attack"
-
     http_evidence = http_evidence or {}
 
     if http_evidence.get("has_query") or http_evidence.get("has_body"):
@@ -1657,19 +2048,6 @@ def should_bypass_cooldown(
 
     if telemetry_reason:
         return True, f"telemetry_{telemetry_reason}_after_non_attack"
-
-    if correlation_data.get("suspicious_activity"):
-        return True, "correlation_suspicious_after_non_attack"
-
-    severity = str(
-        correlation_data.get("severity", "informational")
-    ).lower()
-
-    if (
-        SEVERITY_RANK.get(severity, 0)
-        >= SEVERITY_RANK[VALIDATOR_MIN_SEVERITY]
-    ):
-        return True, f"correlation_severity={severity}_after_non_attack"
 
     return False, None
 
@@ -1823,6 +2201,8 @@ def get_threat_assessment(
         layer2_result,
         layer1_label=layer1_label,
         flow_telemetry=flow_telemetry,
+        flow_info=flow_info,
+        http_evidence=http_evidence,
     )
 
     if not allowed:
@@ -2040,6 +2420,242 @@ def print_mitre_analysis(mitre_analysis):
         )
 
 
+def print_action_response(action_response):
+    if not isinstance(action_response, dict):
+        return
+
+    status = action_response.get("status", "not_run")
+    actions = action_response.get("executed_actions") or []
+
+    print(
+        "ACTION AGENT ->",
+        f"status={status}",
+        f"mitigation={action_response.get('mitre_mitigation_id') or '-'}",
+        f"actions={len(actions)}",
+    )
+
+    if action_response.get("action_plan_summary"):
+        print("ACTION PLAN ->", action_response["action_plan_summary"])
+
+    for item in actions:
+        if isinstance(item, dict):
+            print(
+                "  [SOAR TOOL] ->",
+                item.get("tool"),
+                f"status={item.get('status')}",
+                f"mode={item.get('execution_mode', '-')}",
+                f"reason={item.get('reason', '')}",
+            )
+
+
+def decide_action_after_mitre(metadata):
+    """Doğrulanmış saldırıda Action Agent'ı (otomatik veya on_demand) çalıştırır."""
+    if ACTION_MODE == "off":
+        return skipped_action(
+            "skipped",
+            "action_disabled",
+            "Action Agent disabled (ACTION_MODE=off).",
+        )
+
+    validation = metadata.get("threat_validation") or {}
+
+    if validation.get("status") != "completed":
+        return skipped_action(
+            "skipped",
+            "validation_not_completed",
+            "Action Agent waiting for threat validation.",
+        )
+
+    if not is_attack_verdict(validation, SUSPICIOUS_MITRE_MIN_CONFIDENCE):
+        return skipped_action(
+            "skipped",
+            "verdict_not_attack",
+            f"No action needed: verdict={validation.get('verdict')}.",
+        )
+
+    if ACTION_MODE == "on_demand":
+        return skipped_action(
+            "deferred",
+            "awaiting_user_request",
+            "Attack confirmed. Use 'Aksiyon Al' on the dashboard.",
+        )
+
+    return run_action_agent(metadata)
+
+
+# ==========================================================
+# ASYNC LLM & SOAR WORKER QUEUE (Zero Packet-Drop Buffer)
+# ==========================================================
+
+_llm_task_queue = queue.Queue(maxsize=32)
+_llm_worker_started = False
+_llm_worker_lock = threading.Lock()
+_pending_signatures = set()
+_recent_http_endpoint_alerts = {}  # (src_ip, dst_port, norm_path, has_enum) -> (monotonic_ts, metadata_file)
+HTTP_BURST_CONSOLIDATION_SECONDS = 30.0
+
+
+def _refresh_http_burst_evidence_in_metadata(metadata, llm_flow_info):
+    """
+    Kuyrukta bekleyen bir HTTP/Enumeration uyarısı sıra kendisine geldiğinde,
+    o sırada gelen tüm ardışık istekleri (örn. id=1..100) `source_http_activity`
+    üzerinden güncelleyerek Qwen'e tek seferde tam resmi sunar.
+    """
+    orig_src_ip = metadata.get("src_ip")
+    http_ev = metadata.get("http_evidence")
+    if not orig_src_ip or not isinstance(http_ev, dict):
+        return
+
+    history = list(source_http_activity.get(orig_src_ip) or [])
+    if not history:
+        return
+
+    raw_paths = [
+        p.strip()
+        for p in str(http_ev.get("path") or "").splitlines()
+        if p.strip()
+    ]
+    norm_path = re.sub(r"^https?://[^/]+", "", raw_paths[0]) if raw_paths else "/"
+    recent_list = [item[4] for item in history][-15:]
+
+    activity = metadata.get("source_activity")
+    if not isinstance(activity, dict):
+        activity = {}
+        metadata["source_activity"] = activity
+
+    activity["recent_http_requests"] = recent_list
+    activity["http_request_count_in_window"] = len(history)
+
+    same_path_queries = [
+        item[3] for item in history if item[2] == norm_path and item[3]
+    ]
+    distinct_queries = list(dict.fromkeys(same_path_queries))
+
+    behavioral_findings = metadata.get("behavioral_findings")
+    if not isinstance(behavioral_findings, list):
+        behavioral_findings = []
+        metadata["behavioral_findings"] = behavioral_findings
+
+    if len(distinct_queries) >= 2:
+        updated = False
+        for b in behavioral_findings:
+            if isinstance(b, dict) and b.get("behavior") == "http_parameter_enumeration":
+                b["evidence"] = {
+                    "endpoint": norm_path,
+                    "distinct_query_count": len(distinct_queries),
+                    "observed_queries": distinct_queries[-12:],
+                    "recent_requests": recent_list[-12:],
+                }
+                updated = True
+                break
+        if not updated:
+            behavioral_findings.append(
+                {
+                    "behavior": "http_parameter_enumeration",
+                    "score": 35,
+                    "confidence": 0.92,
+                    "mitre": "T1595.002",
+                    "evidence": {
+                        "endpoint": norm_path,
+                        "distinct_query_count": len(distinct_queries),
+                        "observed_queries": distinct_queries[-12:],
+                        "recent_requests": recent_list[-12:],
+                    },
+                }
+            )
+
+    metadata["validation_context"] = build_validation_context_with_telemetry(
+        flow_telemetry=metadata.get("flow_telemetry"),
+        flow_info=llm_flow_info,
+        behavioral_findings=behavioral_findings,
+        http_evidence=http_ev,
+        activity=activity,
+        packet_count=metadata.get("packet_count", 0),
+    )
+
+
+def _llm_worker_loop():
+    """
+    Arka planda çalışan tekil Worker Thread.
+    Paket yakalama döngüsünü (tshark) hiç bloklamadan sırayla:
+      1) Qwen Threat Validator
+      2) MITRE ATT&CK Mapper
+      3) Qwen SOAR Action Agent
+    adımlarını yürütür ve alert JSON dosyasını atomik olarak günceller.
+    """
+    while True:
+        task = _llm_task_queue.get()
+        if task is None:
+            _llm_task_queue.task_done()
+            break
+
+        sig = task.get("signature")
+
+        try:
+            metadata_file = task["metadata_file"]
+            metadata = task["metadata"]
+            llm_flow_info = task["llm_flow_info"]
+
+            _refresh_http_burst_evidence_in_metadata(metadata, llm_flow_info)
+
+            threat_validation, mitre_analysis = get_threat_assessment(
+                validation_context=metadata.get("validation_context"),
+                layer1_label=metadata.get("label"),
+                layer1_confidence=metadata.get("confidence", 0.0),
+                behavioral_findings=metadata.get("behavioral_findings"),
+                correlation_data=metadata.get("correlation_summary") or {},
+                flow_info=llm_flow_info,
+                layer2_result=metadata.get("layer2"),
+                http_evidence=metadata.get("http_evidence"),
+                activity=metadata.get("source_activity"),
+                flow_telemetry=metadata.get("flow_telemetry"),
+            )
+
+            _refresh_http_burst_evidence_in_metadata(metadata, llm_flow_info)
+
+            metadata["threat_validation"] = threat_validation
+            metadata["mitre_analysis"] = mitre_analysis
+            metadata["final_verdict"] = (
+                threat_validation.get("verdict") or "Unvalidated"
+            )
+
+            action_response = decide_action_after_mitre(metadata)
+            metadata["action_response"] = action_response
+
+            write_alert_metadata(metadata_file, metadata)
+
+            print(
+                f"\n[ASYNC AI COMPLETED] {Path(metadata_file).name} -> "
+                f"Verdict: {metadata['final_verdict']} "
+                f"(Queue remaining: {_llm_task_queue.qsize()})"
+            )
+            print_threat_validation(threat_validation)
+            print_mitre_analysis(mitre_analysis)
+            print_action_response(action_response)
+
+        except Exception as exc:
+            print("ASYNC LLM WORKER ERROR ->", repr(exc))
+            traceback.print_exc()
+        finally:
+            if sig is not None:
+                with _llm_worker_lock:
+                    _pending_signatures.discard(sig)
+            _llm_task_queue.task_done()
+
+
+def ensure_llm_worker():
+    global _llm_worker_started
+    with _llm_worker_lock:
+        if not _llm_worker_started:
+            worker = threading.Thread(
+                target=_llm_worker_loop,
+                name="SOC-Async-LLM-Worker",
+                daemon=True,
+            )
+            worker.start()
+            _llm_worker_started = True
+
+
 # ==========================================================
 # ALERT WRITING
 # ==========================================================
@@ -2076,11 +2692,12 @@ def write_alert_metadata(
 # SINGLE PREDICTION PROCESSING
 # ==========================================================
 
-def export_alert_pcap(packets, pcap_file):
+def export_alert_pcap(packets, pcap_file, verbose=True):
     try:
         return export_flow_packets(
             packets,
             pcap_file,
+            verbose=verbose,
         )
     except Exception as exc:
         print(
@@ -2134,14 +2751,47 @@ def process_prediction_row(
         "timestamp": time.time(),
     }
 
+    if _is_multicast_or_local_noise(flow_info):
+        return
+
+    if _is_routine_encrypted_port_443(flow_info):
+        return
+
     update_host_state(flow_info)
 
-    activity = update_source_activity(flow_info)
+    activity = update_source_activity(
+        flow_info,
+        record=not bool(row.get("_pre_recorded_activity")),
+    )
 
     behavioral_findings = detect_behaviors(src_ip)
 
     if behavioral_findings is None:
         behavioral_findings = []
+
+    # Çoklu port taraması (Port Scan - T1046): aynı kaynak kısa sürede >= 5 farklı hedef porta bağlanmaya çalıştıysa
+    unique_ports_count = int(activity.get("unique_dst_ports") or 0)
+    if unique_ports_count >= 5:
+        scanned_ports = sorted({e[2] for e in source_activity.get(src_ip, [])})
+        behavioral_findings.append(
+            {
+                "behavior": "multi_port_service_scan",
+                "score": 35,
+                "confidence": 0.93,
+                "mitre": "T1046",
+                "evidence": {
+                    "unique_dst_ports": unique_ports_count,
+                    "scanned_ports": scanned_ports[:20],
+                    "flow_count": activity.get("flow_count", 0),
+                },
+            }
+        )
+        port_scan_burst_key = (src_ip, 0, "__multi_port_scan__", True)
+        last_ps_burst = _recent_http_endpoint_alerts.get(port_scan_burst_key)
+        now_mono_ps = time.monotonic()
+        if last_ps_burst is not None and (now_mono_ps - last_ps_burst[0]) < HTTP_BURST_CONSOLIDATION_SECONDS:
+            return
+        _recent_http_endpoint_alerts[port_scan_burst_key] = (now_mono_ps, "port_scan")
 
     layer1_decision = decide(label, confidence)
 
@@ -2174,9 +2824,22 @@ def process_prediction_row(
     metadata_file = None
     export_success = False
 
-    if decision in ("ALERT", "REVIEW"):
+    is_http_candidate_flow = (
+        protocol == 6
+        and (
+            src_port in HTTP_EXTRA_PORTS
+            or dst_port in HTTP_EXTRA_PORTS
+            or src_port == 80
+            or dst_port == 80
+        )
+    )
+
+    if decision in ("ALERT", "REVIEW") or is_http_candidate_flow:
+        initial_decision = (
+            decision if decision in ("ALERT", "REVIEW") else "BEHAVIOR_ALERT"
+        )
         pcap_file, metadata_file = create_alert_paths(
-            decision,
+            initial_decision,
             label,
             confidence,
         )
@@ -2184,6 +2847,7 @@ def process_prediction_row(
         export_success = export_alert_pcap(
             packets,
             pcap_file,
+            verbose=False,
         )
 
         if export_success:
@@ -2192,13 +2856,76 @@ def process_prediction_row(
                     label,
                     pcap_file,
                     flow_ports=(src_port, dst_port),
+                    protocol=protocol,
                 )
             )
+            if http_evidence is not None:
+                update_source_http_activity(
+                    src_ip,
+                    http_evidence,
+                    activity,
+                    behavioral_findings,
+                )
         else:
             print(
                 "LAYER2 skipped because flow "
                 "PCAP could not be exported."
             )
+
+    # Dashboard arayüzünün kendi rutin /api/alerts, /api/stats sorgularını sessizce atla
+    if (
+        http_evidence is not None
+        and _is_benign_dashboard_polling(http_evidence)
+        and not behavioral_findings
+        and not has_layer2_attack_evidence(layer2_result)
+    ):
+        if pcap_file is not None and Path(pcap_file).exists():
+            try:
+                Path(pcap_file).unlink()
+            except Exception:
+                pass
+        return
+
+    # HTTP Parametre Taraması / Burst Konsolidasyonu:
+    # Eğer Layer 2 açık bir exploit (SQLi/XSS/Traversal) bulmadıysa (örn. /api/users?id=1..100),
+    #1) Tekil ilk istekte henüz davranışsal anomali yoksa ve Layer 1 yüksek güvenli değilse uyarma;
+    #2) Davranışsal anomali (http_parameter_enumeration) tetiklendikten sonraki 99 kopya akışı
+    #   ayrı ayrı .pcap/.json olarak diske ve kuyruğa yazmak yerine ilk uyarı altında birleştir.
+    if http_evidence is not None and not has_layer2_attack_evidence(layer2_result):
+        raw_paths = [
+            p.strip()
+            for p in str(http_evidence.get("path") or "").splitlines()
+            if p.strip()
+        ]
+        norm_p = re.sub(r"^https?://[^/]+", "", raw_paths[0]) if raw_paths else "/"
+        has_enum = any(
+            isinstance(b, dict)
+            and b.get("behavior") in ("http_parameter_enumeration", "http_credential_brute_force")
+            for b in (behavioral_findings or [])
+        )
+        is_auth_ep = any(
+            tok in norm_p.lower()
+            for tok in ("/login", "/signin", "/auth", "/session", "/token")
+        )
+        if not behavioral_findings and (confidence < VALIDATOR_MIN_CONFIDENCE or is_auth_ep):
+            if pcap_file is not None and Path(pcap_file).exists():
+                try:
+                    Path(pcap_file).unlink()
+                except Exception:
+                    pass
+            return
+
+        burst_key = (src_ip, dst_port, norm_p, bool(has_enum))
+        last_burst = _recent_http_endpoint_alerts.get(burst_key)
+        now_mono = time.monotonic()
+        if last_burst is not None and (now_mono - last_burst[0]) < HTTP_BURST_CONSOLIDATION_SECONDS:
+            if pcap_file is not None and Path(pcap_file).exists():
+                try:
+                    Path(pcap_file).unlink()
+                except Exception:
+                    pass
+            return
+        _recent_http_endpoint_alerts[burst_key] = (now_mono, str(metadata_file or ""))
 
     xgb_result = {
         "label": label,
@@ -2219,19 +2946,30 @@ def process_prediction_row(
             "raw_result": safe_json_value(correlation_data),
         }
 
-    is_suspicious = bool(
-        correlation_data.get("suspicious_activity", False)
+    has_payload_evidence = (
+        int(correlation_data.get("payload_score", 0) or 0) > 0
+        or has_layer2_attack_evidence(layer2_result)
     )
 
-    has_behavior_evidence = bool(behavioral_findings) or is_suspicious
+    has_behavior_evidence = bool(behavioral_findings) or has_payload_evidence
 
     retained_reason = None
 
     if decision == "BENIGN" and not has_behavior_evidence:
+        if pcap_file is not None and Path(pcap_file).exists():
+            try:
+                Path(pcap_file).unlink()
+            except Exception:
+                pass
         return
 
     if decision == "LOW_CONFIDENCE":
         if not has_behavior_evidence:
+            if pcap_file is not None and Path(pcap_file).exists():
+                try:
+                    Path(pcap_file).unlink()
+                except Exception:
+                    pass
             return
 
         retained_reason = (
@@ -2239,40 +2977,50 @@ def process_prediction_row(
         )
 
     if decision in ("BENIGN", "LOW_CONFIDENCE"):
-        if decision == "BENIGN" and is_suspicious:
+        if decision == "BENIGN" and has_behavior_evidence:
             retained_reason = "benign_label_with_suspicious_behavior"
 
-        decision = "BEHAVIOR_ALERT"
+        decision = "ALERT" if has_payload_evidence else "BEHAVIOR_ALERT"
 
-        pcap_file, metadata_file = create_alert_paths(
-            decision,
-            label,
-            confidence,
-        )
-
-        export_success = export_alert_pcap(
-            packets,
-            pcap_file,
-        )
-
-        if export_success:
-            layer2_result, http_evidence = (
-                run_layer2_for_exported_flow(
-                    label,
-                    pcap_file,
-                    flow_ports=(src_port, dst_port),
-                )
+        if pcap_file is None or metadata_file is None:
+            pcap_file, metadata_file = create_alert_paths(
+                decision,
+                label,
+                confidence,
             )
 
-            if layer2_result is not None:
-                refreshed = correlate(
-                    xgb_result=xgb_result,
-                    payload_result=layer2_result,
-                    behavioral_findings=behavioral_findings,
-                )
+            export_success = export_alert_pcap(
+                packets,
+                pcap_file,
+                verbose=False,
+            )
 
-                if isinstance(refreshed, dict):
-                    correlation_data = refreshed
+            if export_success:
+                layer2_result, http_evidence = (
+                    run_layer2_for_exported_flow(
+                        label,
+                        pcap_file,
+                        flow_ports=(src_port, dst_port),
+                        protocol=protocol,
+                    )
+                )
+                if http_evidence is not None:
+                    update_source_http_activity(
+                        src_ip,
+                        http_evidence,
+                        activity,
+                        behavioral_findings,
+                    )
+
+                if layer2_result is not None or behavioral_findings:
+                    refreshed = correlate(
+                        xgb_result=xgb_result,
+                        payload_result=layer2_result,
+                        behavioral_findings=behavioral_findings,
+                    )
+
+                    if isinstance(refreshed, dict):
+                        correlation_data = refreshed
 
     if pcap_file is None or metadata_file is None:
         print(
@@ -2280,6 +3028,14 @@ def process_prediction_row(
             "PCAP path was not created."
         )
         return
+
+    if export_success and Path(pcap_file).exists():
+        print(
+            "PCAP EXPORTED ->",
+            pcap_file,
+            f"packets={len(packets)}",
+            f"bytes={Path(pcap_file).stat().st_size}",
+        )
 
     # Akış telemetrisi (süre / hacim / hız / TCP bayrakları).
     # Layer 1 etiketi içermez; yalnızca fiziksel metrikler.
@@ -2298,7 +3054,13 @@ def process_prediction_row(
 
     llm_flow_info = dict(flow_info)
 
-    if llm_flow_info["src_ip"] == "172.20.10.1" or llm_flow_info["src_ip"] == "127.0.0.1":
+    if (
+        llm_flow_info["src_ip"] in ("172.20.10.1", "127.0.0.1")
+        or (
+            is_http_candidate_flow
+            and (has_layer2_attack_evidence(layer2_result) or behavioral_findings)
+        )
+    ):
         llm_flow_info["src_ip"] = "185.220.101.46"  # Saldırgan Tor IP'si
 
 
@@ -2312,30 +3074,141 @@ def process_prediction_row(
         packet_count=len(packets),
     )
 
-    # 4. Değişkenleri hata durumuna karşı başlatıyoruz
-    threat_validation = {}
-    mitre_analysis = {}
+    # 4. İlk kayıt için varsayılan/asenkron durumlar + Pre-Queue Deduplication
+    allowed_gate, gate_reason = should_run_validator(
+        confidence,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+        layer1_label=label,
+        flow_telemetry=flow_telemetry,
+        flow_info=llm_flow_info,
+        http_evidence=http_evidence,
+    )
 
-    try:
-        # 5. Qwen'i çağır
-        threat_validation, mitre_analysis = get_threat_assessment(
-            validation_context=validation_context,
-            layer1_label=label,
-            layer1_confidence=confidence,
-            behavioral_findings=behavioral_findings,
-            correlation_data=correlation_data,
-            flow_info=llm_flow_info,  # DİKKAT: Buraya da llm_flow_info yazıyoruz
-            layer2_result=layer2_result,
-            http_evidence=http_evidence,
-            activity=activity,
-            flow_telemetry=flow_telemetry,
+    signature = build_assessment_signature(
+        label,
+        llm_flow_info,
+        behavioral_findings,
+        correlation_data,
+        layer2_result,
+        http_evidence,
+        activity,
+        flow_telemetry=flow_telemetry,
+    )
+
+    should_enqueue_async = (
+        ASYNC_LLM_PIPELINE
+        and VALIDATOR_MODE == "auto"
+        and allowed_gate
+    )
+
+    pre_resolved_assessment = None
+
+    if should_enqueue_async:
+        # 4a) Cache'te zaten varsa kuyruğa sokmadan 0 sn'de yeniden kullan
+        cached = _cache_get(signature)
+        if cached is not None:
+            value, age = cached
+            pre_resolved_assessment = _reuse(value, "same_evidence_signature", age)
+            should_enqueue_async = False
+        else:
+            # 4b) Kaynak IP cooldown kontrolü (payload/davranış yoksa kuyruğa sokma)
+            src_key = llm_flow_info.get("src_ip")
+            last = validator_last_run_by_source.get(src_key)
+            if last is not None:
+                last_time, last_value = last
+                age = time.monotonic() - last_time
+                if age < VALIDATOR_MIN_INTERVAL_PER_SOURCE:
+                    bypass, _ = should_bypass_cooldown(
+                        last_value[0],
+                        layer2_result,
+                        behavioral_findings,
+                        correlation_data,
+                        http_evidence,
+                        flow_telemetry,
+                    )
+                    if not bypass:
+                        if last_value[0].get("status") == "completed":
+                            pre_resolved_assessment = _reuse(
+                                last_value, "source_cooldown", age
+                            )
+                        else:
+                            pre_resolved_assessment = (
+                                _skipped_validation(
+                                    "skipped",
+                                    "cooldown",
+                                    f"Qwen not called: cooldown for {src_key} "
+                                    f"({age:.1f}s < {VALIDATOR_MIN_INTERVAL_PER_SOURCE}s).",
+                                ),
+                                skipped_mitre(
+                                    "skipped", "validation_not_run", "Cooldown."
+                                ),
+                            )
+                        should_enqueue_async = False
+
+        # 4c) Aynı kanıt imzası şu an kuyrukta bekliyorsa kopyasını tekrar kuyruğa sokma
+        if should_enqueue_async:
+            with _llm_worker_lock:
+                if signature in _pending_signatures:
+                    pre_resolved_assessment = (
+                        _skipped_validation(
+                            "skipped",
+                            "duplicate_in_queue",
+                            "Identical flow signature is already queued for Qwen evaluation.",
+                        ),
+                        skipped_mitre(
+                            "skipped",
+                            "duplicate_in_queue",
+                            "Identical flow already queued.",
+                        ),
+                    )
+                    should_enqueue_async = False
+                else:
+                    _pending_signatures.add(signature)
+
+    if should_enqueue_async:
+        threat_validation = _skipped_validation(
+            "queued",
+            f"async_queue ({gate_reason})",
+            "Alert queued for background Qwen Threat Validator & SOAR Agent.",
         )
-    except Exception as e:
-        print(f"LLM Assessment Error: {e}")
-        threat_validation = {"verdict": "Unvalidated", "confidence": 0, "reasoning": str(e)}
+        mitre_analysis = skipped_mitre(
+            "queued",
+            "waiting_for_async_validator",
+            "Queued behind Threat Validator.",
+        )
+        action_response = skipped_action(
+            "queued",
+            "waiting_for_async_pipeline",
+            "Queued behind Threat Validator & MITRE Mapper.",
+        )
+        final_verdict = "Queued"
+    elif pre_resolved_assessment is not None:
+        threat_validation, mitre_analysis = pre_resolved_assessment
+        final_verdict = threat_validation.get("verdict") or "Unvalidated"
+    else:
+        threat_validation = {}
+        mitre_analysis = {}
+        try:
+            threat_validation, mitre_analysis = get_threat_assessment(
+                validation_context=validation_context,
+                layer1_label=label,
+                layer1_confidence=confidence,
+                behavioral_findings=behavioral_findings,
+                correlation_data=correlation_data,
+                flow_info=llm_flow_info,
+                layer2_result=layer2_result,
+                http_evidence=http_evidence,
+                activity=activity,
+                flow_telemetry=flow_telemetry,
+            )
+        except Exception as e:
+            print(f"LLM Assessment Error: {e}")
+            threat_validation = {"verdict": "Unvalidated", "confidence": 0, "reasoning": str(e)}
 
-    # 6. Kararı al
-    final_verdict = threat_validation.get("verdict") or "Unvalidated"
+        final_verdict = threat_validation.get("verdict") or "Unvalidated"
+
     metadata = {
         "decision": decision,
         "layer1_decision": layer1_decision,
@@ -2371,10 +3244,40 @@ def process_prediction_row(
     if http_evidence is not None:
         metadata["http_evidence"] = http_evidence
 
+    if not should_enqueue_async:
+        action_response = decide_action_after_mitre(metadata)
+
+    metadata["action_response"] = action_response
+
     write_alert_metadata(
         metadata_file,
         metadata,
     )
+
+    if should_enqueue_async:
+        ensure_llm_worker()
+        task_item = {
+            "metadata_file": metadata_file,
+            "metadata": copy.deepcopy(metadata),
+            "llm_flow_info": llm_flow_info,
+            "signature": signature,
+        }
+        is_urgent = bool(has_payload_evidence or behavioral_findings)
+        try:
+            if is_urgent:
+                with _llm_task_queue.mutex:
+                    if len(_llm_task_queue.queue) < _llm_task_queue.maxsize:
+                        _llm_task_queue.queue.appendleft(task_item)
+                        _llm_task_queue.unfinished_tasks += 1
+                        _llm_task_queue.not_empty.notify()
+                    else:
+                        raise queue.Full
+            else:
+                _llm_task_queue.put_nowait(task_item)
+        except queue.Full:
+            with _llm_worker_lock:
+                _pending_signatures.discard(signature)
+            print("ASYNC QUEUE FULL WARNING -> Falling back to on_demand for this alert.")
 
     print(
         f"{decision} -> "
@@ -2421,8 +3324,12 @@ def process_prediction_row(
             f"anomalies detected for {src_ip}"
         )
 
-    print_threat_validation(threat_validation)
-    print_mitre_analysis(mitre_analysis)
+    if not should_enqueue_async:
+        print_threat_validation(threat_validation)
+        print_mitre_analysis(mitre_analysis)
+        print_action_response(action_response)
+    else:
+        print(f"ASYNC AI QUEUED -> queue_size={_llm_task_queue.qsize()} ({gate_reason})")
 
     print("METADATA ->", metadata_file)
 
@@ -2431,10 +3338,13 @@ def process_prediction_row(
 # BATCH INFERENCE
 # ==========================================================
 
-def process_batch():
+def process_batch(force=False):
     global completed_flows
 
-    if len(completed_flows) < FLOW_BATCH_SIZE:
+    if not completed_flows:
+        return
+
+    if not force and len(completed_flows) < FLOW_BATCH_SIZE:
         return
 
     flows_to_process = completed_flows[:FLOW_BATCH_SIZE]
@@ -2569,6 +3479,20 @@ def process_batch():
                 )
 
             report_rows.append(row)
+
+        batch_ts = time.time()
+        for r_dict in report_rows:
+            fi = {
+                "src_ip": str(r_dict["src_ip"]),
+                "dst_ip": str(r_dict["dst_ip"]),
+                "src_port": int(r_dict["src_port"]),
+                "dst_port": int(r_dict["dst_port"]),
+                "protocol": int(r_dict["protocol"]),
+                "timestamp": batch_ts,
+            }
+            if not _is_multicast_or_local_noise(fi) and not _is_routine_encrypted_port_443(fi):
+                update_source_activity(fi, record=True)
+                r_dict["_pre_recorded_activity"] = True
 
         prediction_report = pd.DataFrame(report_rows)
 
@@ -2727,6 +3651,8 @@ def run_live_capture():
     print(f"Listening on interface {INTERFACE}")
 
     packet_counter = 0
+    last_batch_flush = time.time()
+    batch_flush_interval = 4.0
 
     try:
         for packet in capture.sniff_continuously():
@@ -2760,6 +3686,11 @@ def run_live_capture():
                 }
 
             flow_state = active_flows[flow_key]
+
+            # macOS lo0 (loopback) BPF her paketi hem gönderirken hem alırken 2 kez
+            # yakaladığı için birebir aynı ardışık kopya çerçeveyi tekilleştirir.
+            if flow_state["packets"] and flow_state["packets"][-1] == raw_packet:
+                continue
 
             flow_state["last_seen"] = now
             flow_state["packets"].append(raw_packet)
@@ -2799,9 +3730,34 @@ def run_live_capture():
 
             while len(completed_flows) >= FLOW_BATCH_SIZE:
                 process_batch()
+                last_batch_flush = time.time()
+
+            if completed_flows and (now - last_batch_flush) >= batch_flush_interval:
+                process_batch(force=True)
+                last_batch_flush = time.time()
 
     except KeyboardInterrupt:
         print("\nLive capture stopped by user.")
+        for key, state in list(active_flows.items()):
+            _, _, s_port, d_port, proto = key
+            if proto == 6 and (
+                s_port in HTTP_EXTRA_PORTS
+                or d_port in HTTP_EXTRA_PORTS
+                or s_port == 80
+                or d_port == 80
+            ):
+                completed_flows.append((key, state))
+                del active_flows[key]
+        if completed_flows:
+            print(f"Flushing {len(completed_flows)} remaining completed flows...")
+            while completed_flows:
+                process_batch(force=True)
+        if not _llm_task_queue.empty():
+            print(f"Waiting for {_llm_task_queue.qsize()} queued AI analysis task(s) to finish (press Ctrl+C again to exit immediately)...")
+            try:
+                _llm_task_queue.join()
+            except KeyboardInterrupt:
+                print("\nExiting immediately.")
 
     except Exception as exc:
         print(
@@ -2827,6 +3783,12 @@ def main():
         "Layer 1 classes ->",
         list(label_encoder.classes_),
     )
+
+    try:
+        from soc_api import start_background_server
+        start_background_server(port=8765, alerts_dir=ALERTS_DIRECTORY)
+    except Exception as exc:
+        print("Dashboard auto-start warning ->", repr(exc))
 
     warm_up_models()
     run_live_capture()

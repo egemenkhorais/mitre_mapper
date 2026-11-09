@@ -141,6 +141,15 @@ def _as_dict(value):
     return value if isinstance(value, dict) else {}
 
 
+NON_ALERT_JSON_STEMS = {
+    "actions_ledger",
+    "waf_rules",
+    "blocked_ips",
+    "rate_limits",
+    "incidents",
+}
+
+
 class AlertStore:
     def __init__(self, alerts_dir=DEFAULT_ALERTS_DIR, attack_json=DEFAULT_ATTACK_JSON):
         self.alerts_dir = Path(alerts_dir)
@@ -150,6 +159,7 @@ class AlertStore:
         self._raw = {}        # id -> raw metadata
         self._sig = {}        # id -> (mtime_ns, size)
         self._seq = 0
+        self._last_refresh = 0.0
 
     # ------------------------------------------------------------
     def normalize(self, alert_id, raw, mtime):
@@ -231,18 +241,25 @@ class AlertStore:
         }
 
     # ------------------------------------------------------------
-    def refresh(self):
+    def refresh(self, force=False):
         """alerts/ klasörünü tarar; yeni/değişen kayıtların id listesini döner."""
         changed = []
 
         if not self.alerts_dir.exists():
             return changed
 
+        now = time.monotonic()
+        if not force and (now - self._last_refresh) < 0.35:
+            return changed
+
         seen = set()
 
         with self._lock:
+            self._last_refresh = time.monotonic()
             for path in self.alerts_dir.glob("*.json"):
                 alert_id = path.stem
+                if alert_id in NON_ALERT_JSON_STEMS:
+                    continue
                 seen.add(alert_id)
 
                 try:
@@ -261,10 +278,14 @@ class AlertStore:
                     # Yazım sürüyor olabilir; sonraki taramada tekrar denenir.
                     continue
 
-                if not isinstance(raw, dict):
+                if not isinstance(raw, dict) or "decision" not in raw:
                     continue
 
-                record = self.normalize(alert_id, raw, stat.st_mtime)
+                try:
+                    record = self.normalize(alert_id, raw, stat.st_mtime)
+                except Exception:
+                    continue
+
                 # Yeni veya güncellenen her kayıt yeni bir seq alır;
                 # SSE istemcileri seq'e göre yalnızca yeniyi alır.
                 self._seq += 1

@@ -16,6 +16,43 @@ BEHAVIOR_CONTEXT = {
     "credential_access": "credential access credential dumping password authentication",
     "command_and_control": "command and control network communication",
     "data_exfiltration": "exfiltration data transfer external network",
+    "sql_injection": (
+        "exploit public facing application web application sql injection "
+        "initial access database query"
+    ),
+    "xss": (
+        "exploit public facing application web application cross site scripting "
+        "initial access"
+    ),
+    "path_traversal": (
+        "exploit public facing application file and directory discovery "
+        "path traversal initial access"
+    ),
+    "command_injection": (
+        "exploit public facing application command and scripting interpreter "
+        "remote code execution"
+    ),
+    "web_attack": (
+        "exploit public facing application web application exploit initial access"
+    ),
+    "exploitation": (
+        "exploit public facing application exploitation of remote services"
+    ),
+    "http_parameter_enumeration": (
+        "active scanning vulnerability scanning account discovery "
+        "network service discovery web parameter enumeration"
+    ),
+    "http_credential_brute_force": (
+        "brute force password guessing credential stuffing authentication "
+        "credential access login attempts"
+    ),
+    "multi_port_service_scan": (
+        "network service discovery port scanning active scanning "
+        "multiple target ports discovery"
+    ),
+    "reconnaissance": (
+        "active scanning vulnerability scanning network service discovery"
+    ),
 }
 
 # Ports that are not discriminative on their own (web/DNS) -> never turned into a query.

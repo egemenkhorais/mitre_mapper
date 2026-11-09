@@ -37,6 +37,7 @@
       <span id="conn-text" class="text-slate-300">bağlanıyor…</span>
     </div>
     <div class="flex space-x-2">
+      <button onclick="clearAllAlerts()" class="px-3 py-1.5 text-xs font-medium rounded-md bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800">🗑️ Alertleri Temizle</button>
       <button onclick="exportNavigatorJson()" class="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">ATT&amp;CK Navigator JSON</button>
       <button onclick="exportCSV()" class="px-3 py-1.5 text-xs font-medium rounded-md bg-cyan-600 hover:bg-cyan-500 text-white">CSV Raporu Al</button>
     </div>
@@ -48,6 +49,10 @@
     <div class="space-y-1">
       <div class="text-[11px] font-mono text-slate-400 uppercase tracking-wider px-3 mb-2 font-semibold">Görünümler</div>
       <button onclick="switchView('dashboard')" id="nav-dashboard" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 text-cyan-400 border border-slate-700/60">Genel Durum (SOC)</button>
+      <button onclick="switchView('attacks')" id="nav-attacks" class="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">
+        <span>🔥 Doğrulanmış Saldırılar</span>
+        <span id="nav-attacks-badge" class="px-1.5 py-0.5 text-[10px] font-mono font-bold rounded bg-rose-950 text-rose-300 border border-rose-800">0</span>
+      </button>
       <button onclick="switchView('matrix')" id="nav-matrix" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">ATT&amp;CK Matrisi</button>
       <button onclick="switchView('inspector')" id="nav-inspector" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">Olay İnceleme</button>
       <button onclick="switchView('rules')" id="nav-rules" class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800/60">Gözlenen Eşlemeler</button>
@@ -77,8 +82,8 @@
           <div class="text-2xl font-bold font-mono text-white mt-1" id="stat-total-events">-</div>
           <div class="text-[11px] text-emerald-400 mt-2 font-mono" id="stat-recent">-</div>
         </div>
-        <div class="p-4 rounded-xl bg-slate-900 border border-slate-800">
-          <div class="text-xs font-mono text-slate-400 uppercase">Doğrulanmış Saldırı</div>
+        <div onclick="switchView('attacks')" class="p-4 rounded-xl bg-slate-900 border border-rose-900/50 hover:border-rose-600 cursor-pointer transition-colors" title="Doğrulanmış saldırıları görüntülemek için tıkla">
+          <div class="text-xs font-mono text-rose-300 uppercase flex items-center justify-between"><span>Doğrulanmış Saldırı</span><span class="text-[10px] underline">Görüntüle →</span></div>
           <div class="text-2xl font-bold font-mono text-rose-400 mt-1" id="stat-confirmed">-</div>
           <div class="text-[11px] text-slate-400 mt-2 font-mono truncate" id="stat-verdicts">-</div>
         </div>
@@ -103,19 +108,49 @@
         </div>
 
         <div class="lg:col-span-2 p-5 rounded-xl bg-slate-900 border border-slate-800">
-          <h3 class="text-sm font-semibold text-slate-200 mb-4">Son Alert'ler · AI Kararı · MITRE</h3>
-          <div class="overflow-x-auto">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h3 class="text-sm font-semibold text-slate-200">Son Alert'ler · AI Kararı · MITRE · SOAR</h3>
+            <div class="flex flex-wrap gap-1.5 text-[11px] font-mono">
+              <button onclick="setAlertFilter('all')" id="flt-all" class="px-2.5 py-1 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-700 font-semibold">Tümü</button>
+              <button onclick="setAlertFilter('confirmed')" id="flt-confirmed" class="px-2.5 py-1 rounded-md bg-slate-800 text-rose-300 border border-slate-700 hover:bg-slate-700">🔥 Doğrulanmış Saldırı</button>
+              <button onclick="setAlertFilter('soar')" id="flt-soar" class="px-2.5 py-1 rounded-md bg-slate-800 text-emerald-300 border border-slate-700 hover:bg-slate-700">⚡ SOAR Aksiyonu</button>
+              <button onclick="setAlertFilter('benign')" id="flt-benign" class="px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700">Normal / İnceleme</button>
+            </div>
+          </div>
+          <div class="overflow-x-auto max-h-[420px] scrollbar-thin">
             <table class="w-full text-left text-xs font-mono">
               <thead><tr class="text-slate-400 border-b border-slate-800">
-                <th class="pb-2">Zaman</th><th class="pb-2">Etiket</th><th class="pb-2">Akış</th><th class="pb-2">AI Kararı</th><th class="pb-2">MITRE</th><th class="pb-2">Güven</th><th class="pb-2">Risk</th>
+                <th class="pb-2">Zaman</th><th class="pb-2">Tespit / Etiket</th><th class="pb-2">Akış</th><th class="pb-2">AI Kararı</th><th class="pb-2">MITRE</th><th class="pb-2">SOAR</th><th class="pb-2">Risk</th>
               </tr></thead>
               <tbody id="recent-alerts-tbody" class="divide-y divide-slate-800/60"></tbody>
             </table>
           </div>
-          <div id="empty-hint" class="hidden text-xs font-mono text-slate-500 py-8 text-center">Henüz alert yok. live_soc.py çalışıp alerts/ klasörüne yazdıkça burada görünecek.</div>
-          <div class="mt-4 pt-3 border-t border-slate-800/80 text-xs text-slate-400 font-mono">Son 8 alert gösteriliyor · satıra tıklayarak detay aç</div>
+          <div id="empty-hint" class="hidden text-xs font-mono text-slate-500 py-8 text-center">Seçili filtrede henüz alert yok.</div>
+          <div class="mt-4 pt-3 border-t border-slate-800/80 flex justify-between text-xs text-slate-400 font-mono">
+            <span id="table-footer-count">Son alert'ler gösteriliyor · satıra tıklayarak detay aç</span>
+            <button onclick="switchView('attacks')" class="text-rose-400 hover:underline">Tüm doğrulanmış saldırı kartlarını aç →</button>
+          </div>
         </div>
       </div>
+    </div>
+
+    <!-- CONFIRMED ATTACKS VIEW -->
+    <div id="view-attacks" class="hidden space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-bold text-white flex items-center gap-2"><span>🔥 Doğrulanmış Saldırılar &amp; SOAR Müdahale Raporu</span></h2>
+          <p class="text-xs text-slate-400 font-mono">Threat Validator (Qwen LLM) tarafından "Saldırı (Malicious)" veya yüksek güvenli "Şüpheli (Suspicious ≥%80)" olarak doğrulanmış gerçek tehditler, MITRE eşlemeleri ve alınan otonom SOAR aksiyonları.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex gap-1.5 text-[11px] font-mono">
+            <button onclick="setAttacksTabFilter('confirmed')" id="atk-flt-confirmed" class="px-2.5 py-1 rounded-md bg-rose-950 text-rose-300 border border-rose-700 font-semibold">🔥 Doğrulanmış Saldırı</button>
+            <button onclick="setAttacksTabFilter('suspicious')" id="atk-flt-suspicious" class="px-2.5 py-1 rounded-md bg-slate-800 text-amber-300 border border-slate-700 hover:bg-slate-700">⚠️ Şüpheli (Suspicious)</button>
+            <button onclick="setAttacksTabFilter('all_flagged')" id="atk-flt-all_flagged" class="px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700">Tümü (Saldırı + Şüpheli)</button>
+          </div>
+          <button onclick="switchView('dashboard')" class="px-3 py-1.5 text-xs font-mono rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700">← Genel SOC Paneline Dön</button>
+        </div>
+      </div>
+      <div id="confirmed-attacks-list" class="space-y-4"></div>
     </div>
 
     <!-- MATRIX -->
@@ -134,11 +169,15 @@
 
     <!-- INSPECTOR -->
     <div id="view-inspector" class="hidden space-y-4">
-      <div>
-        <h2 class="text-lg font-bold text-white">Olay İnceleme</h2>
-        <p class="text-xs text-slate-400 font-mono">Önce "AI'a Sor" ile gerçekten saldırı mı diye doğrulat; saldırı ise "MITRE Eşle" ile aksiyon için teknik eşlet.</p>
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-bold text-white">Olay İnceleme (Sabit &amp; Canlı Güncellenen Görünüm)</h2>
+          <p class="text-xs text-slate-400 font-mono">Seçtiğin akış ekranda sabit kalır; arka planda Qwen AI, MITRE ve SOAR tamamlandıkça bu akışın detayı canlı güncellenir.</p>
+        </div>
+        <label class="flex items-center gap-2 text-xs font-mono text-slate-400 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 cursor-pointer">
+          <input type="checkbox" id="follow-live"> Yeni gelen farklı akışa otomatik atla
+        </label>
       </div>
-      <label class="flex items-center gap-2 text-xs font-mono text-slate-300"><input type="checkbox" id="follow-live" checked> Canlı takip</label>
       <div id="inspector-body" class="text-xs font-mono text-slate-500">Bir alert seçin.</div>
     </div>
 
@@ -180,7 +219,7 @@
 </div>
 
 <script>
-const state = { alerts: [], selectedId: null, busy: {} };
+const state = { alerts: [], selectedId: null, busy: {}, filter: 'all', attacksTabFilter: 'confirmed' };
 const SEV_TR = { critical:'Kritik', high:'Yüksek', medium:'Orta', low:'Düşük', informational:'Bilgi' };
 const SEV_CLASS = {
   critical:'text-rose-400 bg-rose-950/60 border-rose-800',
@@ -206,6 +245,9 @@ const flowText = a => `${esc(a.src_ip)}:${esc(a.src_port)} → ${esc(a.dst_ip)}:
 
 function verdictBadge(verdict, status) {
   if (!verdict) {
+    if (status === 'queued') {
+      return `<span class="px-2 py-0.5 rounded text-[10px] font-bold border text-purple-300 bg-purple-950/60 border-purple-700 animate-pulse">Kuyrukta…</span>`;
+    }
     const txt = status === 'pending_user' ? 'Sorulmadı' : (status || 'not_run');
     return `<span class="px-2 py-0.5 rounded text-[10px] border text-slate-400 bg-slate-900 border-slate-700">${esc(txt)}</span>`;
   }
@@ -214,8 +256,44 @@ function verdictBadge(verdict, status) {
 const isAttack = v => v && v.status === 'completed' &&
   (v.verdict === 'Malicious' || (v.verdict === 'Suspicious' && (v.confidence || 0) >= 0.8));
 
+function isConfirmedRecord(a) {
+  if (!a) return false;
+  if (a.is_confirmed_attack) return true;
+  return a.validation_status === 'completed' &&
+    (a.verdict === 'Malicious' || (a.verdict === 'Suspicious' && (a.verdict_confidence || 0) >= 0.8));
+}
+
+function effectiveDetectionTitle(a) {
+  const l2 = a.layer2 && a.layer2.label && !['normal', 'benign', 'none', 'unknown'].includes(String(a.layer2.label).toLowerCase()) ? a.layer2.label : null;
+  const beh = (a.behaviors || []).filter(Boolean);
+  if (l2) {
+    return `${l2} (Layer-2)`;
+  }
+  if (beh.length) {
+    return `${beh[0]} (Davranış)`;
+  }
+  return a.label || 'Bilinmeyen';
+}
+
+function detectionCellHtml(a) {
+  const l2 = a.layer2 && a.layer2.label && !['normal', 'benign'].includes(String(a.layer2.label).toLowerCase()) ? a.layer2.label : null;
+  const beh = (a.behaviors || []).filter(Boolean);
+  let sub = `<span class="block text-[10px] text-slate-500">${esc(a.decision)} · L1: ${esc(a.label)} (${pct(a.confidence)})</span>`;
+  if (l2) {
+    return `<span class="text-rose-300 font-bold">${esc(l2)} <span class="text-[10px] px-1 rounded bg-rose-950 border border-rose-800">L2</span></span>${sub}`;
+  }
+  if (beh.length) {
+    return `<span class="text-amber-300 font-bold">${esc(beh[0])} <span class="text-[10px] px-1 rounded bg-amber-950 border border-amber-800">BEH</span></span>${sub}`;
+  }
+  return `<span class="font-bold text-slate-200">${esc(a.label)}</span><span class="block text-[10px] text-slate-500">${esc(a.decision)} (${pct(a.confidence)})</span>`;
+}
+
+const API_BASE = (location.protocol === 'file:' || (location.port && location.port !== '8765'))
+  ? 'http://127.0.0.1:8765'
+  : '';
+
 async function api(path, opts = {}) {
-  const r = await fetch(path, { cache: 'no-store', ...opts });
+  const r = await fetch(API_BASE + path, { cache: 'no-store', ...opts });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(data.message || data.error || (path + ' ' + r.status)); e.status = r.status; throw e; }
   return data;
@@ -232,7 +310,11 @@ function renderStats(s) {
   set('stat-total-events', s.total_alerts.toLocaleString('tr-TR'));
   set('stat-recent', `+${s.last_15min} son 15 dk`);
   const bv = s.by_verdict || {};
-  set('stat-confirmed', (bv['Malicious'] || 0) + (bv['Suspicious'] || 0));
+  const localConfirmed = state.alerts.filter(isConfirmedRecord).length;
+  const confirmedCount = (s.confirmed_attacks != null) ? s.confirmed_attacks : localConfirmed;
+  set('stat-confirmed', confirmedCount);
+  const navBadge = document.getElementById('nav-attacks-badge');
+  if (navBadge) navBadge.textContent = confirmedCount;
   set('stat-verdicts', Object.keys(bv).length ? Object.entries(bv).map(([k, v]) => `${VERDICT_TR[k] || k}:${v}`).join(' · ') : '-');
   set('stat-mapped-techniques', `${s.mapped_techniques} Teknik`);
   set('stat-mapped-tactics', `${s.mapped_tactics} Taktik · ${s.mapped_alerts} alert eşlendi`);
@@ -256,24 +338,169 @@ function renderStats(s) {
     `<span class="text-rose-400 font-semibold font-mono">Kritik/Yüksek risk:</span> ${esc(s.critical_high)} ${s.critical_high_labels.length ? '(' + esc(s.critical_high_labels.join(', ')) + ')' : ''}`;
 }
 
+function setAttacksTabFilter(flt) {
+  state.attacksTabFilter = flt;
+  ['confirmed', 'suspicious', 'all_flagged'].forEach(k => {
+    const btn = document.getElementById('atk-flt-' + k);
+    if (!btn) return;
+    const active = k === flt;
+    btn.className = active
+      ? 'px-2.5 py-1 rounded-md bg-rose-950 text-rose-300 border border-rose-600 font-semibold'
+      : 'px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700';
+  });
+  renderConfirmedAttacks();
+}
+
+function setAlertFilter(flt) {
+  state.filter = flt;
+  ['all', 'confirmed', 'soar', 'benign'].forEach(k => {
+    const btn = document.getElementById('flt-' + k);
+    if (!btn) return;
+    const active = k === flt;
+    btn.className = active
+      ? 'px-2.5 py-1 rounded-md bg-cyan-950 text-cyan-300 border border-cyan-600 font-semibold'
+      : 'px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700';
+  });
+  renderRecent();
+}
+
+function filteredAlerts() {
+  if (state.filter === 'confirmed') {
+    return state.alerts.filter(isConfirmedRecord);
+  }
+  if (state.filter === 'soar') {
+    return state.alerts.filter(a => (a.action_count || 0) > 0 || a.action_status === 'completed');
+  }
+  if (state.filter === 'benign') {
+    return state.alerts.filter(a => !isConfirmedRecord(a));
+  }
+  return state.alerts;
+}
+
+function soarBadgeHtml(a) {
+  if ((a.action_count || 0) > 0) {
+    const tools = (a.executed_actions || []).map(x => x.tool).filter(Boolean).join(', ');
+    return `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-700">⚡ ${a.action_count} Aksiyon</span>
+            <span class="text-slate-400 text-[10px] block truncate max-w-[140px]">${esc(tools || a.action_mitigation || '')}</span>`;
+  }
+  if (a.validation_status === 'queued') {
+    return `<span class="text-slate-500 text-[10px]">bekleniyor…</span>`;
+  }
+  return `<span class="text-slate-600 text-[10px]">-</span>`;
+}
+
 function renderRecent(freshId) {
   const tbody = document.getElementById('recent-alerts-tbody');
-  const rows = state.alerts.slice(0, 8);
+  const allFiltered = filteredAlerts();
+  const rows = allFiltered.slice(0, 30);
   document.getElementById('empty-hint').classList.toggle('hidden', rows.length > 0);
+  const footer = document.getElementById('table-footer-count');
+  if (footer) {
+    footer.textContent = `${rows.length} / ${allFiltered.length} alert gösteriliyor · satıra tıklayarak detay aç`;
+  }
+  const confirmedTotal = state.alerts.filter(isConfirmedRecord).length;
+  const navBadge = document.getElementById('nav-attacks-badge');
+  if (navBadge) navBadge.textContent = confirmedTotal;
+
   tbody.innerHTML = rows.map(a => {
     const p = a.primary;
     const mitre = p
-      ? `<span class="text-cyan-400 font-semibold">${esc(p.id)}</span><span class="text-slate-400 text-[11px] block truncate max-w-[160px]">${esc(p.name)}</span>`
+      ? `<span class="text-cyan-400 font-semibold">${esc(p.id)}</span><span class="text-slate-400 text-[11px] block truncate max-w-[150px]">${esc(p.name)}</span>`
       : `<span class="text-slate-500">${esc(a.mitre_status)}</span><span class="text-slate-600 text-[10px] block">${esc(a.mitre_reason || '')}</span>`;
     return `<tr class="alert-row hover:bg-slate-800/40 ${a.id === freshId ? 'fresh' : ''}" onclick="openAlert('${esc(a.id)}')">
       <td class="py-2.5 text-slate-400">${esc(a.time)}</td>
-      <td class="py-2.5 font-bold text-slate-200">${esc(a.label)}<span class="block text-[10px] text-slate-500">${esc(a.decision)}</span></td>
+      <td class="py-2.5">${detectionCellHtml(a)}</td>
       <td class="py-2.5 text-slate-400 text-[11px]">${flowText(a)}</td>
       <td class="py-2.5">${verdictBadge(a.verdict, a.validation_status)}${a.verdict ? `<span class="text-slate-500 text-[10px] block">${pct(a.verdict_confidence)}</span>` : ''}</td>
       <td class="py-2.5">${mitre}</td>
-      <td class="py-2.5 text-purple-400">${pct(a.confidence)}</td>
+      <td class="py-2.5">${soarBadgeHtml(a)}</td>
       <td class="py-2.5">${sevBadge(a.severity)}<span class="text-slate-500 text-[10px] block">risk ${esc(a.risk_score)}</span></td>
     </tr>`;
+  }).join('');
+  renderConfirmedAttacks();
+}
+
+function renderConfirmedAttacks() {
+  const box = document.getElementById('confirmed-attacks-list');
+  if (!box) return;
+  const confirmedList = state.alerts.filter(isConfirmedRecord);
+  const suspiciousList = state.alerts.filter(a => a.verdict === 'Suspicious');
+  const allFlaggedList = state.alerts.filter(a => isConfirmedRecord(a) || a.verdict === 'Suspicious');
+
+  const btnConf = document.getElementById('atk-flt-confirmed');
+  const btnSusp = document.getElementById('atk-flt-suspicious');
+  const btnAll = document.getElementById('atk-flt-all_flagged');
+  if (btnConf) btnConf.textContent = `🚨 Doğrulanmış Saldırılar (${confirmedList.length})`;
+  if (btnSusp) btnSusp.textContent = `⚠️ Şüpheli Akışlar (${suspiciousList.length})`;
+  if (btnAll) btnAll.textContent = `Tümü (${allFlaggedList.length})`;
+
+  const flt = state.attacksTabFilter || 'confirmed';
+  const attacks = flt === 'suspicious' ? suspiciousList : (flt === 'all_flagged' ? allFlaggedList : confirmedList);
+
+  if (!attacks.length) {
+    box.innerHTML = `<div class="p-8 rounded-xl bg-slate-900 border border-slate-800 text-center text-xs font-mono text-slate-400">
+      Bu filtrede henüz kayıt yok.<br>
+      <span class="text-slate-500 text-[11px]">Saldırı simülasyonu (attack_test.py) çalıştığında veya yeni tehdit doğrulandığında burada detaylı kartlar halinde listelenecek.</span>
+    </div>`;
+    return;
+  }
+
+  box.innerHTML = attacks.map(a => {
+    const p = a.primary;
+    const http = a.http_evidence;
+    const actions = a.executed_actions || [];
+    const actionsHtml = actions.length ? actions.map(act => `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono bg-emerald-950/80 text-emerald-300 border border-emerald-700/80">
+        <span class="font-bold">⚡ ${esc(act.tool)}</span>
+        ${act.target_ip ? `<span class="text-amber-300">(${esc(act.target_ip)})</span>` : ''}
+        ${act.blocked_pattern_decoded ? `<code class="text-rose-300">${esc(act.blocked_pattern_decoded)}</code>` : ''}
+      </span>`).join(' ') : `<span class="text-slate-500 text-[11px] font-mono">SOAR aksiyonu bekleniyor / alınmadı</span>`;
+
+    return `<div class="p-5 rounded-xl bg-slate-900 border border-rose-900/60 hover:border-rose-700 transition-colors space-y-3 font-mono text-xs">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          ${verdictBadge(a.verdict, a.validation_status)}
+          <span class="text-sm font-bold text-white">${esc(effectiveDetectionTitle(a))}</span>
+          <span class="text-slate-500 text-[11px]">· ${esc(a.date)} ${esc(a.time)}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          ${p ? `<span onclick="showTechModal('${esc(p.id)}')" class="cursor-pointer px-2.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-700 font-bold text-[11px]">${esc(p.id)} · ${esc(p.name)}</span>` : ''}
+          ${sevBadge(a.severity)}
+          <button onclick="openAlert('${esc(a.id)}')" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-[11px] font-semibold">Detay &amp; İncele →</button>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+        <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+          <span class="text-slate-500 block text-[10px] uppercase">Ağ Akışı (Saldırgan → Hedef)</span>
+          <span class="text-amber-300 font-bold">${flowText(a)}</span>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+          <span class="text-slate-500 block text-[10px] uppercase">Tespit Katmanları</span>
+          <span class="text-slate-200">L1: ${esc(a.label)} (${pct(a.confidence)})${a.layer2 && a.layer2.label ? ` · <span class="text-rose-300 font-semibold">L2: ${esc(a.layer2.label)} (${pct(a.layer2.confidence)})</span>` : ''}${(a.behaviors || []).length ? ` · <span class="text-amber-300 font-semibold">Davranış: ${esc(a.behaviors.join(', '))}</span>` : ''}</span>
+        </div>
+        <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
+          <span class="text-slate-500 block text-[10px] uppercase">AI Güven &amp; Risk Skoru</span>
+          <span class="text-purple-300 font-bold">AI Güven: ${pct(a.verdict_confidence)}</span> · <span class="text-rose-300 font-bold">Risk: ${esc(a.risk_score)}</span>
+        </div>
+      </div>
+
+      ${http ? `<div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px]">
+        <span class="text-slate-500 uppercase text-[10px] mr-2">HTTP Payload:</span>
+        <span class="text-cyan-400 font-bold">${esc(http.method || 'GET')}</span>
+        <span class="text-amber-300">${esc(http.path || '/')}</span>${http.query ? `<span class="text-rose-300 font-semibold">?${esc(http.query)}</span>` : ''}
+      </div>` : ''}
+
+      ${a.verdict_reasoning ? `<div class="text-slate-300 text-[11px] leading-relaxed bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80"><span class="text-purple-400 font-semibold">Qwen AI Analizi:</span> ${esc(a.verdict_reasoning)}</div>` : ''}
+
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-[10px] text-slate-400 uppercase mr-1">SOAR Müdahalesi:</span>
+          ${actionsHtml}
+        </div>
+        ${a.action_mitigation ? `<span class="text-[10px] text-cyan-400">MITRE Mitigation: ${esc(a.action_mitigation)} (${esc(a.action_mitigation_name || '')})</span>` : ''}
+      </div>
+    </div>`;
   }).join('');
 }
 
@@ -368,10 +595,53 @@ function mitreCard(mitre, v, id) {
   </div>`;
 }
 
+function actionCard(act, v, id) {
+  act = act || {};
+  const busy = state.busy[id];
+  const attack = isAttack(v);
+  const btn = `<button onclick="runActionAgent('${esc(id)}', ${attack ? 'false' : 'true'})" ${busy ? 'disabled' : ''}
+     class="px-3 py-1.5 text-xs font-semibold rounded-md ${attack ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'}">
+     ${busy === 'act' ? 'Aksiyon alınıyor…' : (attack ? '⚡ SOAR Aksiyonu Al' : '⚡ Aksiyon Al (zorla)')}</button>`;
+
+  const actions = act.executed_actions || [];
+  const items = actions.length ? actions.map(item => `
+    <div class="p-3 bg-slate-900 rounded-lg border border-emerald-900/60 flex items-start justify-between gap-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-700">${esc(item.tool)}</span>
+          <span class="text-slate-300 text-[11px] font-semibold">${esc(item.execution_mode || item.status || '')}</span>
+          ${item.mitre_id ? `<span class="text-cyan-400 text-[10px]">[${esc(item.mitre_id)}]</span>` : ''}
+        </div>
+        <div class="text-slate-300 text-[11px] mt-1">${esc(item.reason || item.summary || '')}</div>
+        ${item.target_ip ? `<div class="text-slate-400 text-[10px] mt-0.5">Hedef IP: <span class="text-amber-300">${esc(item.target_ip)}</span>${item.duration_minutes ? ` (${esc(item.duration_minutes)} dk)` : ''}</div>` : ''}
+        ${item.blocked_pattern_decoded ? `<div class="text-rose-300 text-[10px] mt-0.5">WAF Kuralı: <code>${esc(item.blocked_pattern_decoded)}</code> (Port ${esc(item.target_port)})</div>` : ''}
+      </div>
+      <span class="text-[10px] text-emerald-400 font-bold uppercase">${esc(item.status || 'completed')}</span>
+    </div>`).join('') : `<div class="text-slate-500">Henüz aksiyon alınmadı (status: ${esc(act.status || 'not_run')}${act.reason ? ' / ' + esc(act.reason) : ''}). ${esc(act.message || '')}</div>`;
+
+  const mitBadge = act.mitre_mitigation_id
+    ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">${esc(act.mitre_mitigation_id)} · ${esc(act.mitigation_name || '')}</span>`
+    : '';
+  const timing = act.timing && act.timing.seconds ? ` · ${esc(act.timing.seconds)}s` : '';
+
+  return `<div class="p-4 rounded-lg border border-slate-800 bg-slate-950 space-y-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] text-slate-400 uppercase">SOAR Action Agent (status: ${esc(act.status || 'not_run')}${timing})</span>
+        ${mitBadge}
+      </div>
+      ${btn}
+    </div>
+    ${act.action_plan_summary ? `<div class="text-emerald-300 text-xs">${esc(act.action_plan_summary)}</div>` : ''}
+    <div class="space-y-2">${items}</div>
+  </div>`;
+}
+
 function renderInspectorContent(a, raw) {
   const body = document.getElementById('inspector-body');
   const v = raw.threat_validation || null;
   const mitre = raw.mitre_analysis || {};
+  const actResp = raw.action_response || {};
   const kv = (k, val) => `<div class="p-3 bg-slate-950 rounded-lg border border-slate-800"><div class="text-[10px] text-slate-400 uppercase">${esc(k)}</div><div class="text-sm font-bold text-slate-200 mt-0.5 break-words">${val}</div></div>`;
   const l2 = raw.layer2 || a.layer2;
   const act = raw.source_activity || a.source_activity || {};
@@ -397,9 +667,13 @@ function renderInspectorContent(a, raw) {
       </div>
       ${top ? `<div class="text-slate-400">Top tahminler: <span class="text-slate-200">${top}</span></div>` : ''}
       ${raw.retained_reason ? `<div class="text-amber-300">Korunma nedeni: ${esc(raw.retained_reason)}</div>` : ''}
-      ${http ? `<div class="p-3 bg-slate-950 rounded-lg border border-slate-800 text-slate-300">HTTP: ${esc(http.method)} ${esc(http.path)} (query:${http.has_query ? 'var' : 'yok'}, body:${http.has_body ? 'var' : 'yok'})</div>` : ''}
+      ${http ? `<div class="p-3 bg-slate-950 rounded-lg border border-slate-800 text-slate-300 space-y-1">
+        <div>HTTP: <span class="text-cyan-400 font-bold">${esc(http.method || '?')}</span> <span class="text-amber-300">${esc(http.path || '/')}</span>${http.query ? `<span class="text-rose-300">?${esc(http.query)}</span>` : ''} (query:${http.has_query ? 'var' : 'yok'}, body:${http.has_body ? 'var' : 'yok'})</div>
+        ${http.raw_request ? `<pre class="text-[10px] text-slate-400 bg-slate-900 p-2 rounded overflow-x-auto max-h-32">${esc(http.raw_request)}</pre>` : ''}
+      </div>` : ''}
       ${validationCard(v, a.id)}
       ${mitreCard(mitre, v, a.id)}
+      ${actionCard(actResp, v, a.id)}
       <div class="text-[10px] text-slate-500 break-all">PCAP: ${esc(raw.pcap_file || '-')}</div>
     </div>`;
 }
@@ -443,6 +717,8 @@ async function runAction(id, kind, url) {
     if (cached && state.selectedId === id) renderInspectorContent(cached.alert, cached.raw);
     if (e.status === 409 && kind === 'mitre') {
       if (confirm(e.message + '\n\nYine de MITRE eşlensin mi?')) return runMitre(id, true);
+    } else if (e.status === 409 && kind === 'act') {
+      if (confirm(e.message + '\n\nYine de SOAR aksiyonu alınsın mı?')) return runActionAgent(id, true);
     } else {
       alert('İşlem başarısız: ' + e.message);
     }
@@ -451,22 +727,46 @@ async function runAction(id, kind, url) {
 
 function askAI(id) { return runAction(id, 'validate', `/api/alerts/${encodeURIComponent(id)}/validate`); }
 function runMitre(id, force) { return runAction(id, 'mitre', `/api/alerts/${encodeURIComponent(id)}/mitre${force ? '?force=1' : ''}`); }
+function runActionAgent(id, force) { return runAction(id, 'act', `/api/alerts/${encodeURIComponent(id)}/act${force ? '?force=1' : ''}`); }
 
 // ------------------------------------------------------------------
 function switchView(viewId) {
-  ['dashboard', 'matrix', 'inspector', 'rules'].forEach(id => {
+  ['dashboard', 'attacks', 'matrix', 'inspector', 'rules'].forEach(id => {
     const active = id === viewId;
-    document.getElementById('view-' + id).classList.toggle('hidden', !active);
+    const viewEl = document.getElementById('view-' + id);
+    if (viewEl) viewEl.classList.toggle('hidden', !active);
     const btn = document.getElementById('nav-' + id);
-    ['bg-slate-800', 'text-cyan-400', 'border', 'border-slate-700/60'].forEach(c => btn.classList.toggle(c, active));
-    btn.classList.toggle('text-slate-300', !active);
+    if (btn) {
+      ['bg-slate-800', 'text-cyan-400', 'border', 'border-slate-700/60'].forEach(c => btn.classList.toggle(c, active));
+      btn.classList.toggle('text-slate-300', !active);
+    }
   });
+  if (viewId === 'attacks') renderConfirmedAttacks();
   if (viewId === 'matrix') loadMatrix();
   if (viewId === 'rules') loadRules();
 }
 
+async function clearAllAlerts() {
+  if (!confirm('alerts/ klasöründeki tüm alert (.json ve .pcap) dosyaları silinecek. Emin misiniz?')) return;
+  try {
+    const res = await api('/api/alerts/clear', { method: 'POST' });
+    state.alerts = [];
+    state.selectedId = null;
+    Object.keys(inspectorCache).forEach(k => delete inspectorCache[k]);
+    renderRecent();
+    await loadStats();
+    loadMatrix();
+    loadRules();
+    alert(`Temizlendi (${res.removed_files || 0} dosya silindi).`);
+  } catch (e) {
+    alert('Temizleme hatası: ' + e.message);
+  }
+}
+
 function openAlert(id) {
   state.selectedId = id;
+  const fl = document.getElementById('follow-live');
+  if (fl) fl.checked = false;
   switchView('inspector');
   renderInspector(id);
 }
@@ -487,7 +787,18 @@ async function showTechModal(id) {
 function closeModal() { const m = document.getElementById('technique-modal'); m.classList.add('hidden'); m.classList.remove('flex'); }
 
 // ------------------------------------------------------------------
-async function loadStats()  { try { renderStats(await api('/api/stats')); } catch (e) {} }
+async function loadStats()  {
+  try {
+    const s = await api('/api/stats');
+    renderStats(s);
+    const localConf = state.alerts.filter(isConfirmedRecord).length;
+    if (s.total_alerts !== state.alerts.length || (s.confirmed_attacks !== undefined && s.confirmed_attacks !== localConf)) {
+      const res = await api('/api/alerts?limit=500');
+      state.alerts = res.alerts || [];
+      renderRecent();
+    }
+  } catch (e) {}
+}
 async function loadMatrix() { try { renderMatrix(await api('/api/matrix')); } catch (e) {} }
 async function loadRules()  { try { renderRules((await api('/api/mappings')).mappings); } catch (e) {} }
 
@@ -502,11 +813,12 @@ function scheduleRefresh() {
 }
 
 function connectStream() {
-  const es = new EventSource('/api/stream');
+  const es = new EventSource(API_BASE + '/api/stream');
   es.onopen = () => setConn(true, 'canlı akış bağlı');
   es.onerror = () => setConn(false, 'bağlantı koptu, yeniden deneniyor…');
   es.addEventListener('alert', ev => {
     const a = JSON.parse(ev.data);
+    delete inspectorCache[a.id];
     const i = state.alerts.findIndex(x => x.id === a.id);
     if (i >= 0) state.alerts[i] = a; else state.alerts.unshift(a);
     state.alerts.sort((x, y) => y.ts - x.ts);
@@ -515,8 +827,15 @@ function connectStream() {
     scheduleRefresh();
     const inspecting = !document.getElementById('view-inspector').classList.contains('hidden');
     const busyNow = state.selectedId && state.busy[state.selectedId];
-    if (document.getElementById('follow-live').checked && inspecting && !busyNow) {
-      state.selectedId = a.id; renderInspector(a.id);
+    if (inspecting && !busyNow) {
+      if (a.id === state.selectedId) {
+        // İncelediğimiz akışın kendi verisi güncellendi (Qwen/MITRE/SOAR bitti): anında yenile!
+        renderInspector(a.id);
+      } else if (document.getElementById('follow-live').checked) {
+        // Sadece kullanıcı "Yeni gelene otomatik geç" kutusunu açtıysa başka akışa atla
+        state.selectedId = a.id;
+        renderInspector(a.id);
+      }
     }
   });
 }

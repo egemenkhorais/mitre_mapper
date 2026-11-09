@@ -347,15 +347,50 @@ def run_mitre_analysis(
     validation = validation if isinstance(validation, dict) else {}
     correlation_data = correlation_data if isinstance(correlation_data, dict) else {}
 
-    if not behavioral_findings:
-        behavioral_findings = [
+    enriched_findings = [
+        dict(item) for item in (behavioral_findings or []) if isinstance(item, dict)
+    ]
+
+    l2_status = str(layer2_result.get("status") or "").lower()
+    l2_label = str(layer2_result.get("label") or "").strip().lower().replace("-", "_")
+    l2_conf = float(layer2_result.get("confidence") or 0.0)
+
+    if l2_status == "classified" and l2_label not in {"", "benign", "normal", "none", "unknown"}:
+        enriched_findings.append(
+            {
+                "behavior": l2_label,
+                "confidence": max(l2_conf, 0.90),
+                "score": int(max(l2_conf, 0.90) * 100),
+                "mitre": "T1190",
+                "evidence": {
+                    "layer2_label": l2_label,
+                    "http_method": http_evidence.get("method"),
+                    "http_path": http_evidence.get("path"),
+                    "http_query": http_evidence.get("query"),
+                    "validator_indicators": validation.get("malicious_indicators") or [],
+                },
+            }
+        )
+
+    if not enriched_findings:
+        enriched_findings = [
             {
                 "behavior": str(layer1_label).lower().replace(" ", "_"),
                 "confidence": float(layer1_confidence),
                 "score": int(float(layer1_confidence) * 100),
-                "evidence": {},
+                "evidence": {
+                    "validator_indicators": validation.get("malicious_indicators") or [],
+                    "http_path": http_evidence.get("path"),
+                    "http_query": http_evidence.get("query"),
+                },
             }
         ]
+
+    effective_label = (
+        l2_label
+        if (l2_status == "classified" and l2_label not in {"", "benign", "normal", "none", "unknown"})
+        else str(layer1_label)
+    )
 
     started = time.perf_counter()
 
@@ -363,9 +398,9 @@ def run_mitre_analysis(
         analyze_mitre = _load_mitre_functions()["analyze_mitre"]
 
         mitre_output = analyze_mitre(
-            attack_label=str(layer1_label),
-            confidence=float(layer1_confidence),
-            behavioral_findings=behavioral_findings,
+            attack_label=effective_label,
+            confidence=max(float(layer1_confidence), l2_conf),
+            behavioral_findings=enriched_findings,
             host_state={
                 "correlation_risk_score": correlation_data.get("risk_score", 0),
                 "correlation_severity": correlation_data.get("severity", "informational"),
@@ -458,10 +493,99 @@ def run_mitre_analysis(
         if message:
             response["message"] = message
 
-        return filter_mitre_analysis(
+        filtered = filter_mitre_analysis(
             response,
             has_payload_evidence=bool(layer2_result or http_evidence),
         )
+
+        # Doğrulanmış saldırıda retriever/LLM teknik seçemediyse kanıta dayalı deterministik teknik ata
+        kept_techniques = (filtered.get("result") or {}).get("techniques") or []
+        if not kept_techniques and validation.get("verdict") in ("Malicious", "Suspicious"):
+            fallback_tech = None
+            if l2_status == "classified" and l2_label in {
+                "sql_injection", "xss", "path_traversal", "command_injection", "web_attack"
+            }:
+                fallback_tech = {
+                    "id": "T1190",
+                    "name": "Exploit Public-Facing Application",
+                    "confidence": round(max(l2_conf, float(validation.get("confidence") or 0.90)), 2),
+                    "visibility": "content_visible",
+                    "reason": f"HTTP {l2_label} exploit payload confirmed in request",
+                }
+            elif any(
+                isinstance(b, dict) and b.get("behavior") == "http_credential_brute_force"
+                for b in enriched_findings
+            ):
+                fallback_tech = {
+                    "id": "T1110.001",
+                    "name": "Brute Force: Password Guessing",
+                    "confidence": round(float(validation.get("confidence") or 0.92), 2),
+                    "visibility": "content_visible",
+                    "reason": "Repeated failed HTTP authentication / credential guessing attempts detected",
+                }
+            elif any(
+                isinstance(b, dict) and b.get("behavior") == "multi_port_service_scan"
+                for b in enriched_findings
+            ):
+                fallback_tech = {
+                    "id": "T1046",
+                    "name": "Network Service Discovery",
+                    "confidence": round(float(validation.get("confidence") or 0.90), 2),
+                    "visibility": "flow_visible",
+                    "reason": "Multi-port TCP service discovery scan across multiple target ports",
+                }
+            elif any(
+                isinstance(b, dict) and b.get("behavior") == "http_parameter_enumeration"
+                for b in enriched_findings
+            ):
+                fallback_tech = {
+                    "id": "T1595.002",
+                    "name": "Active Scanning: Vulnerability Scanning",
+                    "confidence": round(float(validation.get("confidence") or 0.88), 2),
+                    "visibility": "flow_visible",
+                    "reason": "Sequential HTTP endpoint parameter enumeration detected",
+                }
+            elif str(layer1_label).strip().lower() in {"brute force", "password"}:
+                fallback_tech = {
+                    "id": "T1110",
+                    "name": "Brute Force",
+                    "confidence": round(float(validation.get("confidence") or 0.85), 2),
+                    "visibility": "flow_visible",
+                    "reason": "Repeated authentication or credential guessing traffic",
+                }
+            elif str(layer1_label).strip().lower() in {"dos", "ddos"}:
+                fallback_tech = {
+                    "id": "T1499",
+                    "name": "Endpoint Denial of Service",
+                    "confidence": round(float(validation.get("confidence") or 0.85), 2),
+                    "visibility": "flow_visible",
+                    "reason": "High-rate denial of service traffic pattern",
+                }
+            elif str(layer1_label).strip().lower() == "reconnaissance":
+                fallback_tech = {
+                    "id": "T1595",
+                    "name": "Active Scanning",
+                    "confidence": round(float(validation.get("confidence") or 0.85), 2),
+                    "visibility": "flow_visible",
+                    "reason": "Active network probing / reconnaissance traffic",
+                }
+
+            if fallback_tech is not None:
+                filtered["status"] = "completed"
+                filtered["reason"] = "evidence_backed_mapping"
+                filtered.pop("message", None)
+                filtered["result"] = {"techniques": [fallback_tech]}
+                if not filtered.get("candidates"):
+                    filtered["candidates"] = [
+                        {
+                            "rank": 1,
+                            "id": fallback_tech["id"],
+                            "name": fallback_tech["name"],
+                            "tactics": ["initial-access" if fallback_tech["id"] == "T1190" else "reconnaissance"],
+                        }
+                    ]
+
+        return filtered
 
     except Exception as exc:
         elapsed = time.perf_counter() - started

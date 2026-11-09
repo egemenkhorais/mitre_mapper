@@ -1,4 +1,8 @@
 outputs/
+alerts/
+cache/
+.idea/
+.env
 *.csv
 *.joblib
 *.pcap*

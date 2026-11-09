@@ -27,8 +27,8 @@ OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 VALIDATOR_MODEL = "qwen3:8b"
 VALIDATOR_TIMEOUT = 120
 VALIDATOR_KEEP_ALIVE = "30m"
-VALIDATOR_NUM_PREDICT = 320
-VALIDATOR_NUM_CTX = 8192
+VALIDATOR_NUM_PREDICT = 280
+VALIDATOR_NUM_CTX = 3072
 
 # Qwen3 düşünme modunu kapatır (ollama run --think=false eşdeğeri).
 VALIDATOR_DISABLE_THINKING = True
@@ -51,26 +51,24 @@ _VERDICT_LOOKUP = {
 # Skeptical prompt may produce this wording; it is a Benign outcome.
 _VERDICT_LOOKUP["false_positive"] = "Benign"
 
-SYSTEM_PROMPT = """You are a senior SOC analyst with a skeptical mindset, working in an ENTERPRISE network.
-About 99% of the alerts that reach you turn out to be FALSE POSITIVES.
+SYSTEM_PROMPT = """You are a senior SOC analyst evaluating raw network traffic and HTTP payloads.
+Your goal is to accurately distinguish between normal enterprise/local network noise (such as mDNS, SSDP, OSPF, normal web browsing) and real cyber attacks.
 
-You are given raw network evidence only: addresses, ports, protocol, address properties, source activity, behavioral findings and (when visible) the observed HTTP request. You are NOT told what any automated detector concluded. Form your own independent judgement from the evidence.
-
-Your job is to find the strongest reason why this traffic could be legitimate: routing protocols, multicast/broadcast discovery (SSDP, mDNS), name resolution, OS/vendor update and telemetry, CDN or browser behaviour, normal REST/JSON API calls, health checks, monitoring agents, developer tools.
+You are given raw network evidence: addresses, ports, protocol, address properties, source activity, behavioral findings, flow telemetry, and (when visible) the observed HTTP request/response.
 
 Rules:
-1. First construct the best benign explanation from the evidence.
-2. Use the network_facts block (address properties, direction, well-known service names) as ground truth.
-3. Answer "Malicious" ONLY when the visible content contains clear exploitation or malicious code (for example SQL injection syntax, script injection, path traversal, command injection, known exploit payloads, credential stuffing) or when the behavior numbers unambiguously show an attack. Put the exact indicator from the evidence in malicious_indicators.
-4. If you are unsure, answer "Benign" or "Likely Benign". Never guess "Malicious".
-5. Missing payload is not proof of innocence: if there is no HTTP content but behavioral_findings or source_activity show scanning or flooding across many ports or hosts, "Suspicious" is allowed. Cite the numbers.
+1. CRITICAL: Inspect `http_evidence` (including URL-encoded characters like %27 for ', %22 for ", %3C for <, --, /*, UNION, SELECT, OR 1=1, ../, etc.) very carefully BEFORE assuming traffic is benign.
+2. Answer "Malicious" IMMEDIATELY when `http_evidence` contains SQL injection (e.g., admin'--, admin%27--, OR 1=1, UNION SELECT), XSS, path traversal, command injection, or authentication bypass attempts — EVEN IF the server responded with 404 Not Found, 401, or 500, and EVEN IF packet count is low! A failed exploit attempt is STILL a "Malicious" attack.
+3. Also answer "Malicious" or "Suspicious" when `source_activity` or `flow_telemetry` shows rapid sequential requests to endpoints (e.g., ID enumeration /api/users?id=1,2,3..., port scanning, or SYN/packet floods).
+4. Answer "Benign" or "Likely Benign" ONLY when the traffic is genuinely harmless (e.g., standard multicast/broadcast discovery like SSDP/mDNS, normal static page loads without exploit strings, or routine encrypted traffic with normal telemetry).
+5. Put the exact indicator from the evidence (e.g. "GET /login?user=admin%27--" or "15 flows in 60s to port 8765") in `malicious_indicators`.
 6. Never claim an indicator that is not literally present in the input.
 
 Verdicts:
 - Benign: clearly legitimate traffic (a false alarm).
 - Likely Benign: probably legitimate, weak or no malicious signal.
 - Suspicious: some evidence contradicts normal behavior, needs analyst review.
-- Malicious: the evidence consistently supports an attack.
+- Malicious: the evidence consistently supports an attack or contains an exploit payload.
 
 Return ONLY a JSON object with exactly these keys:
 {
@@ -191,19 +189,35 @@ def _compact(value, max_len=600):
 
 
 def _compact_http(http_evidence):
-    """HTTP kanıtını LLM için derler: ham istek (header + body) öncelikli."""
+    """HTTP kanıtını LLM için derler: ham istek + çözümlenmiş (URL-decoded) query/path öncelikli."""
     if not isinstance(http_evidence, dict) or not http_evidence:
         return None
 
+    from urllib.parse import unquote_plus
+
     raw_request = http_evidence.get("raw_request")
+    query = http_evidence.get("query")
+    decoded_query = unquote_plus(str(query)) if query else None
+    path = http_evidence.get("path")
+    decoded_path = unquote_plus(str(path)) if path else None
 
     if raw_request:
-        return {
+        raw_str = str(raw_request)[:HTTP_PROMPT_MAX_CHARS]
+        result = {
             "method": http_evidence.get("method"),
-            "path": http_evidence.get("path"),
+            "path": path,
+            "query": query,
+            "decoded_query": decoded_query,
+            "response_summary": http_evidence.get("response_summary"),
             "request_count": http_evidence.get("request_count"),
-            "raw_request": str(raw_request)[:HTTP_PROMPT_MAX_CHARS],
+            "raw_request": raw_str,
         }
+        if decoded_path and decoded_path != path:
+            result["decoded_path"] = decoded_path
+        decoded_raw = unquote_plus(raw_str)
+        if decoded_raw != raw_str:
+            result["decoded_raw_request"] = decoded_raw[:HTTP_PROMPT_MAX_CHARS]
+        return result
 
     # Eski alert kayıtları: ham istek yok, eldeki alanları ver.
     return _compact(http_evidence, HTTP_PROMPT_MAX_CHARS)

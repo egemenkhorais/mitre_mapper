@@ -68,7 +68,7 @@ def trim_raw(raw):
 
 
 def enrich(record):
-    """Store kaydına validator/MITRE alanlarını ham JSON'dan ekler."""
+    """Store kaydına validator/MITRE/Action alanlarını ham JSON'dan ekler."""
     if record is None:
         return None
 
@@ -77,15 +77,27 @@ def enrich(record):
 
     validation = raw.get("threat_validation") or {}
     mitre = raw.get("mitre_analysis") or {}
+    action_resp = raw.get("action_response") or {}
 
     record["verdict"] = validation.get("verdict")
     record["verdict_confidence"] = validation.get("confidence")
     record["validation_status"] = validation.get("status", "not_run")
     record["validation_reason"] = validation.get("reason")
+    record["verdict_reasoning"] = validation.get("reasoning")
+    record["is_confirmed_attack"] = bool(
+        is_attack_verdict(validation, SUSPICIOUS_MITRE_MIN_CONFIDENCE)
+    )
 
     if mitre.get("status"):
         record["mitre_status"] = mitre.get("status")
         record["mitre_reason"] = mitre.get("reason")
+
+    record["action_status"] = action_resp.get("status", "not_run")
+    record["action_mitigation"] = action_resp.get("mitre_mitigation_id")
+    record["action_mitigation_name"] = action_resp.get("mitigation_name")
+    record["action_summary"] = action_resp.get("action_plan_summary")
+    record["executed_actions"] = action_resp.get("executed_actions") or []
+    record["action_count"] = len(record["executed_actions"])
 
     return record
 
@@ -229,6 +241,52 @@ def action_mitre(alert_id, force=False):
     return 200, {"alert": enrich(find_record(alert_id)), "raw": trim_raw(metadata)}
 
 
+def action_respond(alert_id, force=False):
+    metadata, metadata_file, error = load_alert_for_update(alert_id)
+
+    if error:
+        return 404, {"error": error}
+
+    validation = metadata.get("threat_validation") or {}
+
+    if not force and not is_attack_verdict(validation, SUSPICIOUS_MITRE_MIN_CONFIDENCE):
+        return 409, {
+            "error": "not_confirmed_attack",
+            "message": (
+                "Threat Validator bu alert'i saldırı olarak doğrulamadı "
+                f"(verdict={validation.get('verdict')}). "
+                "Yine de aksiyon aldırmak için force=1."
+            ),
+        }
+
+    from action_agent import run_action_agent
+
+    action_resp = run_action_agent(metadata, force=force)
+    action_resp["triggered_by"] = "dashboard_forced" if force else "dashboard"
+
+    metadata["action_response"] = action_resp
+
+    write_json_atomic(metadata_file, metadata)
+    store.refresh()
+
+    return 200, {"alert": enrich(find_record(alert_id)), "raw": trim_raw(metadata)}
+
+
+def action_clear_alerts():
+    alerts_path = Path(store.alerts_dir)
+    removed = 0
+    if alerts_path.exists():
+        for f in alerts_path.iterdir():
+            if f.is_file() and f.suffix.lower() in (".json", ".pcap", ".tmp"):
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    store.refresh(force=True)
+    return 200, {"ok": True, "removed_files": removed}
+
+
 # ==========================================================
 # HTTP
 # ==========================================================
@@ -239,10 +297,27 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # konsolu sessiz tut
 
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
+    def _send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._send_cors_headers()
+        self.end_headers()
+
     # ---------------------------------------------------------
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
+        self._send_cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -256,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found"}, 404)
             return
         self.send_response(200)
+        self._send_cors_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -270,6 +346,19 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)  # gövde kullanılmıyor
+
+        if path == "/api/alerts/clear":
+            status, payload = action_clear_alerts()
+            self._send_json(payload, status)
+            return
+
+        if path in ("/login", "/api/login", "/auth", "/admin/login"):
+            self._send_json({"error": "invalid_credentials", "message": "Authentication failed"}, 401)
+            return
+
+        if path in ("/api/diagnostics", "/api/ping", "/api/exec"):
+            self._send_json({"status": "executed", "output": "uid=0(root) gid=0(wheel)"}, 200)
+            return
 
         if not path.startswith("/api/alerts/"):
             self._send_json({"error": "not found"}, 404)
@@ -298,6 +387,9 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "mitre":
                 force = query.get("force", ["0"])[0] in ("1", "true", "yes")
                 status, payload = action_mitre(alert_id, force=force)
+            elif action in ("act", "respond"):
+                force = query.get("force", ["0"])[0] in ("1", "true", "yes")
+                status, payload = action_respond(alert_id, force=force)
             else:
                 status, payload = 404, {"error": "unknown action"}
         except Exception as exc:
@@ -354,11 +446,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/stats":
             stats = store.stats()
             verdicts = Counter()
+            confirmed_attacks = 0
             for a in store.alerts(limit=0):
                 raw = store.raw(a["id"]) or {}
-                v = (raw.get("threat_validation") or {}).get("verdict")
+                validation = raw.get("threat_validation") or {}
+                v = validation.get("verdict")
                 verdicts[v or "Unvalidated"] += 1
+                if is_attack_verdict(validation, SUSPICIOUS_MITRE_MIN_CONFIDENCE):
+                    confirmed_attacks += 1
             stats["by_verdict"] = dict(verdicts)
+            stats["confirmed_attacks"] = confirmed_attacks
             self._send_json(stats)
 
         elif path == "/api/matrix":
@@ -391,6 +488,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/stream":
             self._stream()
 
+        elif path in ("/login", "/api/login", "/auth", "/admin/login"):
+            self._send_json({"error": "invalid_credentials", "message": "Invalid username or password"}, 401)
+
+        elif path == "/download":
+            self._send_json({"error": "forbidden", "message": "Access to requested file path is restricted"}, 403)
+
+        elif path in ("/search", "/api/users", "/api/diagnostics", "/api/ping"):
+            self._send_json({"ok": True, "results": []}, 200)
+
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -398,6 +504,7 @@ class Handler(BaseHTTPRequestHandler):
     def _stream(self):
         """Server-Sent Events: yeni/güncellenen alert'leri anında iletir."""
         self.send_response(200)
+        self._send_cors_headers()
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
@@ -427,6 +534,99 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(1.0)
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
+
+
+def _get_local_lan_ips():
+    import re
+    import socket
+    import subprocess
+
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            ips.append(ip)
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(["ifconfig", "en0"], text=True, stderr=subprocess.DEVNULL)
+        for m in re.findall(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out):
+            if not m.startswith("127.") and m not in ips:
+                ips.append(m)
+    except Exception:
+        pass
+
+    return ips
+
+
+def start_background_server(
+    host="0.0.0.0",
+    port=8765,
+    alerts_dir=DEFAULT_ALERTS_DIR,
+    attack_json=DEFAULT_ATTACK_JSON,
+):
+    """
+    live_soc.py içinden çağrıldığında Dashboard API sunucusunu arka plan
+    daemon thread olarak başlatır. Port 127.0.0.1 üzerinde zaten doluysa bile
+    yerel ağ (LAN) IP'si (örn. 192.168.0.13:8765) açık değilse onu ayrıca dinlemeye açar.
+    """
+    import urllib.request
+
+    global store
+    if store is None:
+        store = AlertStore(
+            str(Path(alerts_dir).resolve()),
+            str(Path(attack_json).resolve()),
+        )
+        store.refresh(force=True)
+
+    lan_ips = _get_local_lan_ips()
+
+    try:
+        server = ThreadingHTTPServer((host, int(port)), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(
+            target=server.serve_forever,
+            name="SOC-Dashboard-HTTP-Server",
+            daemon=True,
+        )
+        thread.start()
+        lan_hint = f" | LAN: http://{lan_ips[0]}:{port}/" if lan_ips else ""
+        print(f"Dashboard  : http://127.0.0.1:{port}/{lan_hint}  (auto-started)")
+        return server
+    except OSError:
+        print(f"Dashboard API already active at -> http://127.0.0.1:{port}/")
+
+    # Eğer eski bir soc_api.py sadece 127.0.0.1:8765'i dinliyorsa, LAN IP'sini (örn. 192.168.0.13:8765) ayrıca bağla:
+    started_lan_server = None
+    for lan_ip in lan_ips:
+        try:
+            lan_server = ThreadingHTTPServer((lan_ip, int(port)), Handler)
+            lan_server.daemon_threads = True
+            t = threading.Thread(
+                target=lan_server.serve_forever,
+                name=f"SOC-Dashboard-LAN-{lan_ip}",
+                daemon=True,
+            )
+            t.start()
+            print(f"LAN Target : http://{lan_ip}:{port}/  (auto-started for external device testing)")
+            started_lan_server = lan_server
+        except OSError:
+            # LAN IP de zaten dinleniyor; yanıt verip vermediğini kontrol et (Ctrl+Z ile donmuş süreç ihtimali)
+            try:
+                urllib.request.urlopen(f"http://{lan_ip}:{port}/api/health", timeout=1.0).read()
+                print(f"LAN Target : http://{lan_ip}:{port}/  (already listening & healthy)")
+            except Exception:
+                print(
+                    f"WARNING    : Port {port} on {lan_ip} is occupied by an unresponsive/stopped process! "
+                    f"Run: sudo kill -9 $(sudo lsof -t -i:{port})"
+                )
+
+    return started_lan_server
 
 
 def main():

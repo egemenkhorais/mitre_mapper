@@ -142,6 +142,8 @@ def get_network_observable_set(attack_json=DEFAULT_ATTACK_JSON):
         print("NETWORK MITRE SET DERIVATION FAILED ->", repr(exc))
 
     if derived:
+        for fb_id, fb_tier in FALLBACK_SET.items():
+            _merge(derived, fb_id, fb_tier)
         _cache.update(path=path, set=derived, source=f"attack_json:{Path(path).name}")
     else:
         _cache.update(path=path, set=dict(FALLBACK_SET), source="fallback")
